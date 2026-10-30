@@ -1,6 +1,6 @@
 # HCM Lite — Architecture
 
-**Status:** 🟢 **All 12 phases are built and tested** — 16 test suites / 210 tests, plus a full browser
+**Status:** 🟢 **All 12 phases are built and tested** — 16 test suites / 213 tests, plus a full browser
 walk-through against a live API and a verified production same-origin build.
 This document describes *what exists*. Where a rule was planned but not implemented it says so
 explicitly. Read alongside `docs/PROGRESS.md`.
@@ -328,7 +328,7 @@ The deployment is a **monorepo with a static SPA and one catch-all API function*
 {
   "buildCommand": "npm run build",     // api tsc + vite build, at the repo root
   "outputDirectory": "web/dist",       // Vercel serves the SPA, incl. hashed assets
-  "installCommand": "npm ci",
+  "installCommand": "npm ci --include=dev",   // devDependencies are needed by the build
   "framework": null,                   // nothing to auto-detect
   "functions": { "api/[...path].js": { "maxDuration": 30, "memory": 1024 } },
   "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
@@ -339,6 +339,9 @@ Why each piece is there:
 
 - **`buildCommand` before the function.** `api/dist` is git-ignored and must exist when Vercel traces
   the function, so the build runs on the platform rather than the file being shipped from the clone.
+- **`--include=dev` in `installCommand`.** The build needs `tsc` and `vite`, which are
+  devDependencies. This is belt-and-braces insurance against any environment that still arrives with
+  `NODE_ENV=production` set.
 - **`api/[...path].js` is the route.** Vercel derives the URL from the path under `api/`: the catch-all
   name maps `/api/*` to one function and forwards the original URL, which the Express app needs
   because its routers are mounted under `/api/v1`. The file only re-exports
@@ -355,10 +358,17 @@ Why each piece is there:
   does not exist. Its companion `@vercel/static-build` option was also spelled `distDirectory`;
   `distDir` is the real key, so the static output would not have been published either.
 
-`NODE_ENV=production` is set as a **runtime** environment variable, not only a build one:
-`lib/logger.ts` picks the `pino-pretty` transport whenever `NODE_ENV` is not `production`, and
-`pino-pretty` is a devDependency that is not in the function bundle — a request that initialises the
-logger with the wrong `NODE_ENV` would fail on a missing transport.
+**`NODE_ENV` must never be a Vercel environment variable.** Production variables are also injected
+into the build, and npm then omits devDependencies — exactly the `tsc` and `vite` binaries the build
+command needs. Setting it is what made the first two production deploys fail: `npm ci` installed 129
+packages instead of 396 and `npm run build` exited 127. `installCommand: "npm ci --include=dev"` keeps
+the tooling present, and `config/env.ts` derives the runtime environment from Vercel's own
+`VERCEL_ENV` marker via the exported pure helper `inferNodeEnv()`. That still matters for more than
+logging: `lib/logger.ts` picks the `pino-pretty` transport whenever `NODE_ENV` is not `production`
+(`pino-pretty` is a devDependency and is absent from the function bundle), and `isProd` decides
+whether the session cookie is `Secure`. An explicit `NODE_ENV` always wins, so `api/.env` keeps the
+local developer experience unchanged — the derivation only fires where nothing declared one, which is
+exactly the shape of a deployed function.
 
 `middleware/static-web.ts` is what makes a single host possible: the frontend calls the relative path
 `/api/v1`, so UI and API must share an origin. In development Vite's proxy provides that; on a single
@@ -386,7 +396,7 @@ blocked, because the bundle is same-origin, there are no inline scripts, and Goo
 | Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `api/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
 | Static serving | `createApp(webRoot)` takes the root as a parameter, so the middleware is testable even though the default under `NODE_ENV=test` is deliberately off |
 | Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–110 s |
-| Scope | 16 files / 210 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web |
+| Scope | 16 files / 213 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web |
 | Frontend | `tsc --noEmit` and `vite build` only. No unit or E2E runner is installed |
 
 ---
@@ -450,7 +460,7 @@ draft, inert.
 | D28 | One `createApp()`, several entry points | Serverless, long-running and in-memory demo differ only in process lifecycle, so no behaviour is duplicated — and therefore cannot drift |
 | D29 | Helmet's default CSP is kept, not loosened | Verified to block nothing in this app; a permissive CSP chosen to make a demo work is the one thing that would have to be reversed later |
 | D30 | `vercel.json` uses `buildCommand` + `functions` + `rewrites`, not the legacy `builds` / `routes` pair | Micro mode skips the project's build command, so a `builds` entry pointing at the git-ignored `api/dist` could never resolve on a git deploy; the modern keys also let Vercel trace the compiled handler after `npm run build` |
-| D31 | `NODE_ENV=production` is a runtime variable on Vercel | Without it the logger asks for the `pino-pretty` transport, which is a devDependency and is not in the function bundle, so the first request would fail on startup rather than on a route |
+| D31 | `NODE_ENV` is never a Vercel variable; production is inferred from `VERCEL_ENV` | Production variables are injected into the build too, and `NODE_ENV=production` makes `npm ci` drop devDependencies, so `tsc`/`vite` vanish and the build exits 127 — this is precisely how the first two production deploys failed. Vercel guarantees `VERCEL_ENV` at function runtime, so `inferNodeEnv()` rides on that instead and still gets the `pino-pretty`-free logger and the `Secure` cookie |
 
 ---
 

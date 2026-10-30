@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { inferNodeEnv } from '../src/config/env.js'
 import { FixedWindowLimiter } from '../src/lib/fixed-window-limiter.js'
 import { PERMISSIONS, can, isRole, permissionsFor } from '../src/modules/auth/permissions.js'
 
@@ -104,5 +105,21 @@ describe('permission matrix', () => {
     expect(isRole('root')).toBe(false)
     expect(isRole(undefined)).toBe(false)
     expect(isRole(42)).toBe(false)
+  })
+})
+
+describe('inferNodeEnv', () => {
+  it('treats a Vercel production function as production', () => {
+    expect(inferNodeEnv({ VERCEL_ENV: 'production' })).toBe('production')
+  })
+
+  it('never overrides an explicit NODE_ENV', () => {
+    expect(inferNodeEnv({ NODE_ENV: 'development', VERCEL_ENV: 'production' })).toBeUndefined()
+    expect(inferNodeEnv({ NODE_ENV: 'test', VERCEL_ENV: 'production' })).toBeUndefined()
+  })
+
+  it('leaves preview and unrelated hosts to the default', () => {
+    expect(inferNodeEnv({ VERCEL_ENV: 'preview' })).toBeUndefined()
+    expect(inferNodeEnv({})).toBeUndefined()
   })
 })

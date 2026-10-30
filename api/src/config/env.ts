@@ -23,6 +23,21 @@ function loadDotEnv(): void {
 }
 
 /**
+ * Work out the environment from the host's own marker when `NODE_ENV` is absent.
+ *
+ * `NODE_ENV` cannot be supplied as a Vercel environment variable: production
+ * variables are also injected into the build, and npm then omits
+ * devDependencies — which is exactly what `tsc` and `vite` need. Vercel does
+ * guarantee `VERCEL_ENV` at function runtime, so production detection rides on
+ * that instead. Getting this right matters beyond logging: `isProd` decides
+ * whether the session cookie is `Secure`.
+ */
+export function inferNodeEnv(source: NodeJS.ProcessEnv): string | undefined {
+  if (source.NODE_ENV) return undefined
+  return source.VERCEL_ENV === 'production' ? 'production' : undefined
+}
+
+/**
  * Fail fast on misconfiguration. Missing or malformed required variables
  * abort startup with a clear message instead of surfacing later as a
  * confusing runtime error.
@@ -60,6 +75,10 @@ export type Env = z.infer<typeof envSchema>
 
 function loadEnv(): Env {
   loadDotEnv()
+
+  const inferred = inferNodeEnv(process.env)
+  if (inferred) process.env.NODE_ENV = inferred
+
   const parsed = envSchema.safeParse(process.env)
 
   if (!parsed.success) {

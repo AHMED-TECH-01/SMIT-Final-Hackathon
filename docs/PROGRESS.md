@@ -8,14 +8,15 @@
 > Anything else stays 🟡 or ❌. No exceptions.
 
 **Last updated:** 2026-10-30 (session 6)
-**Overall status:** 🟢 **All 12 phases delivered.** 16 test suites / **210 tests** pass, the production
+**Overall status:** 🟢 **All 12 phases delivered.** 16 test suites / **213 tests** pass, the production
 build succeeds, every screen has been driven against a live API in a real browser, the API runs
 against a persistent MongoDB Atlas cluster, and it now serves the built UI from the same origin so
 it is deployable as one service.
 **Demo readiness:** ✅ `npm run demo` boots an in-memory database, seeds it and serves the UI;
 `npm run demo -- --atlas` keeps data; `npm run build && npm run start` serves UI + API on :4000.
-**Deployment:** 🟡 Vercel configuration is committed and the production path is verified locally;
-the live deploy is pending a `vercel login` (only the user can authenticate).
+**Deployment:** 🟡 project linked to Vercel and the GitHub repo connected; the first two production
+builds failed and the cause is fixed in code (`NODE_ENV` must not be a Vercel variable — see
+*Deploying to Vercel*). A redeploy is the remaining step.
 **Outstanding risk:** 🔴 the Atlas password was shared in plain text — see limitation 7.
 
 ---
@@ -36,10 +37,10 @@ the live deploy is pending a `vercel login` (only the user can authenticate).
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Monorepo (npm workspaces `web` + `api`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed` |
-| Backend API | ✅ | 16 route modules, **210 tests** pass |
+| Backend API | ✅ | 16 route modules, **213 tests** pass |
 | MongoDB persistence | ✅ | Runs on the in-memory server **and** against a live Atlas cluster (seed/read/write/delete verified) |
 | Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build |
-| Deployment (Vercel) | 🟡 | `vercel.json` + `api/src/vercel-handler.ts` committed; live deploy unverified until someone logs in |
+| Deployment (Vercel) | 🟡 | Logged in, project linked, GitHub connected; the first builds failed on a self-inflicted `NODE_ENV`, fixed in code — a redeploy is still unverified |
 | MongoDB models | ✅ | 16 Mongoose models covering every domain |
 | Authentication / sessions | ✅ | JWT in HttpOnly cookie, `tokenVersion` revocation, forced password change |
 | RBAC / permissions | ✅ | 26-permission catalogue, 3 roles, enforced per request, denial tests |
@@ -71,6 +72,10 @@ the live deploy is pending a `vercel login` (only the user can authenticate).
 | 5 | `node scripts/verify-prod.mjs` | ✅ `GET /` 200 HTML `no-cache` · asset 200 `max-age=31536000, immutable` · deep link `/attendance` 200 HTML · unknown `/api/v1/*` still **404 NOT_FOUND JSON** · login 200 with `HttpOnly; Secure; SameSite=Lax` · `/auth/me` 26 permissions · dashboard 200, workforce 12 |
 | 6 | Browser against the production build | ✅ React rendered (3,225 chars in `#root`), login → dashboard with **85.6%** and `0/12 marked today`; **zero CSP violations** — helmet's default policy blocks nothing in this app |
 | 7 | `git check-ignore -v api/.env` | ✅ ignored (`.gitignore:12`); no `.env` in the tree to be committed |
+| 8 | `vercel deploy --prod` (after the GitHub-connected push built automatically) | ❌ **errored in 7 s** — `npm ci` installed 129 packages instead of 396 and `npm run build` exited 127. Cause: my own `NODE_ENV=production` **Production** variable was injected into the build, so npm dropped the devDependencies holding `tsc` and `vite` |
+| 9 | `vercel env rm NODE_ENV production` + `installCommand: "npm ci --include=dev"` + `inferNodeEnv()` in `config/env.ts` | ✅ the environment is now derived from Vercel's `VERCEL_ENV`, which is guaranteed at function runtime and invisible to the build |
+| 10 | `npx vitest run --root api` | ✅ **16 files, 213 tests passed**, 68.00 s (3 new `inferNodeEnv` tests) |
+| 11 | Simulated function: `node api/dist/server.js` with `cwd: web/` and no `.env` reachable | ✅ `env: "production"`, JSON logs (no `pino-pretty` transport attempt), login cookie `HttpOnly; Secure; SameSite=Lax` — the derivation works where a deployed function runs it. The first attempt from `api/` proved nothing: `loadDotEnv()` found `api/.env`, whose `NODE_ENV=development` correctly wins over the inference |
 
 ### Session 5 (2026-10-30) — persistent MongoDB Atlas cluster
 
@@ -119,7 +124,7 @@ time. No transaction is used anywhere in the API, so Atlas tier limits are not a
 | `tests/announcements.test.ts` | 20 | Feed visibility by audience, create/patch/delete, read receipts, readers list |
 | `tests/settings.test.ts` | 14 | Company profile, timezone/currency normalisation, attendance policy, audit entries |
 | `tests/assistant.test.ts` | 12 | Intent detection, 7 tools, company-wide refusal for employees, provider fallback |
-| `tests/units.test.ts` | 12 | `FixedWindowLimiter` and the static permission matrix |
+| `tests/units.test.ts` | 15 | `FixedWindowLimiter`, the static permission matrix, `inferNodeEnv` |
 | `tests/seed.test.ts` | 11 | The seed itself: roster integrity, ledger consistency, payroll totals, API read-through |
 | `tests/static-web.test.ts` | 7 | One-origin serving: shell + deep links, immutable asset caching, and that the SPA fallback never swallows an API 404 |
 
@@ -213,17 +218,26 @@ Production environment variables, all stored as **Sensitive** (they cannot be pu
 | --- | --- |
 | `MONGODB_URI` | the same non-SRV Atlas URI as `api/.env`, pointing at the already-seeded `hcm_lite` database |
 | `JWT_SECRET` | freshly generated — deliberately **not** the local development secret |
-| `NODE_ENV` | `production` — required at runtime, not just at build time: `lib/logger.ts` selects the `pino-pretty` transport whenever `NODE_ENV` is not `production`, and `pino-pretty` is a devDependency that is not part of the function bundle. Without it every request would fail while initialising the logger. It also puts the session cookie into `Secure` mode, which is correct behind Vercel's TLS. |
+
+**`NODE_ENV` must not be a Vercel variable, and has been removed.** It looks necessary (the logger
+would otherwise ask for the `pino-pretty` transport, a devDependency absent from the function bundle,
+and the session cookie needs `Secure`), but Production variables are injected into the **build** as
+well, and `NODE_ENV=production` makes `npm ci` omit devDependencies — so `tsc` and `vite` disappear and
+`npm run build` exits 127. That is exactly how the first two production deploys died. The environment
+is now derived in code instead: `config/env.ts` exports `inferNodeEnv()`, which returns `production`
+when `NODE_ENV` is absent and Vercel's `VERCEL_ENV` is `production`. An explicit `NODE_ENV` still wins,
+so local `.env` files and the test suite behave exactly as before.
 
 Two deliberate omissions: `CORS_ORIGINS` (UI and API share one origin, so no cross-origin request is
 ever made) and `ADMIN_EMAIL` / `ADMIN_PASSWORD` (the Atlas database is already seeded; adding demo
 credentials to a public deployment would only invite abuse).
 
-**Not yet verified:** no deployment has been created, so the `vercel.json` layout described in
-`ARCHITECTURE.md` §7 has never run on the platform. `vercel build --prod` cannot validate it here —
-it fails inside this shell with `Error: spawn cmd.exe ENOENT` before running the build command, which
-is an environment problem and not evidence about the config. The first real `vercel deploy` is
-therefore the actual test.
+**Not yet verified:** the redeploy after the `NODE_ENV` fix. The two deploys that did run both errored
+in the build, so nothing has been reachable on a Vercel URL yet, and the Atlas cluster has not been
+reached from Vercel's egress addresses (Network Access must allow them — Vercel functions have no
+fixed egress IP). `vercel build --prod` cannot validate any of this here — it fails inside this shell
+with `Error: spawn cmd.exe ENOENT` before running the build command, an environment problem and not
+evidence about the config.
 
 ---
 
@@ -274,7 +288,7 @@ therefore the actual test.
 | AI | AI assistant + tools + smart leave + policy Q&A | ✅ | ✅ | 12 | ✅ Answers from live records; refuses company-wide questions for employees |
 
 **Totals: all 22 tracked functionalities are complete (18 numbered items + 23–25 + the AI assistant).
-210 automated tests exist and pass.**
+213 automated tests exist and pass.**
 
 > **Numbering note:** the brief's items 19–22 were never transcribed into this tracker during
 > session 1, so nothing is asserted about them here. They are not referenced by any test name,
@@ -421,6 +435,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
+| 2026-10-30 | Session 6 (cont.): logged in to Vercel, linked `hcm-lite` and connected the GitHub repository. The first two production builds errored in 7 s — my own `NODE_ENV=production` variable was injected into the build, so `npm ci` installed 129 of 396 packages and `npm run build` exited 127. Fixed by removing that variable, setting `installCommand: "npm ci --include=dev"`, and adding `inferNodeEnv()` in `config/env.ts` to derive production from Vercel's `VERCEL_ENV`; guarded by 3 new tests (**213** now pass) and reproduced under a deployed function's shape (`env: "production"`, cookie `Secure`). Also re-asserted `!.env.example` after the `.env*` rule that the Vercel CLI appended to `.gitignore`. | Qoder |
 | 2026-10-30 | Session 6: moved `docs/` inside `hcm-lite/` so the documents are versioned and repaired the `.gitignore` encoding damage; added production same-origin serving (`middleware/static-web.ts`: `express.static(web/dist)` after the API routers, SPA fallback before the 404 handler, plus 7 tests); added the serverless entry point `api/src/vercel-handler.ts` and `vercel.json`; documented the deployment environment. Re-ran typecheck, **210 tests**, the production build and a live `NODE_ENV=production` serve (shell `no-cache`, hashed assets `immutable`, deep link served, unknown `/api/v1/*` still JSON 404, login cookie `HttpOnly; Secure; SameSite=Lax`). Made the first commit and pushed to GitHub with `api/.env` excluded. | Qoder |
 | 2026-10-30 | Session 5: created git-ignored `api/.env` with a locally generated `JWT_SECRET`; diagnosed the Node SRV-resolution failure and switched to a non-SRV Atlas URI pinned to a dedicated `hcm_lite` database; seeded Atlas (13 employees / 384 attendance / 7 leave requests); verified 13 endpoints, RBAC denials, all assistant intents and a create→read→delete round-trip through the Vite proxy; added `npm run demo -- --atlas`; re-ran the **203 tests** and proved by fingerprint that they never touch the cluster. No application defects found. | Qoder |
 | 2026-10-29 | Session 4: finished the six remaining screens (organization, analytics, assistant, announcements, audit, settings); added the seed script and its 11 tests; made `.env` load; added `npm run demo` with an in-memory database; fixed the 8560% attendance rate and the "absent on today" board contradiction; rewrote both docs. **203 tests pass.** | Qoder |
