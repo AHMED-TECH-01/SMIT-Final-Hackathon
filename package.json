@@ -1,0 +1,23 @@
+{
+  "name": "hcm-lite",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HCM Lite — MERN Human Capital Management system",
+  "workspaces": [
+    "web",
+    "api"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "dev:web": "npm run dev -w web",
+    "dev:api": "npm run dev -w api",
+    "demo": "node scripts/demo.mjs",
+    "build": "npm run build -w api && npm run build -w web",
+    "start": "npm run start -w api",
+    "test": "npm run test -w api",
+    "seed": "npm run seed -w api",
+    "typecheck": "npm run typecheck -w api && npm run typecheck -w web"
+  }
+}

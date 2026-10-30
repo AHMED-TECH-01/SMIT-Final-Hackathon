@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: #f8fbf9;
+  color: #172d27;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-line rounded-card shadow-card;
+  }
+  .kpi-value {
+    @apply text-[26px] font-bold text-ink leading-tight;
+  }
+  .nav-item {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-ctrl text-[13px] font-medium text-ink/80 hover:bg-surface-muted cursor-pointer;
+  }
+  .nav-item-active {
+    @apply bg-primary-light text-primary-dark font-semibold;
+  }
+  .btn-primary {
+    @apply inline-flex items-center gap-1.5 bg-primary hover:bg-primary-dark text-white text-[13px] font-semibold px-3.5 py-2 rounded-ctrl transition-colors;
+  }
+  .btn-outline {
+    @apply inline-flex items-center gap-1.5 bg-white border border-line text-ink/80 hover:bg-surface-muted text-[13px] font-medium px-3.5 py-2 rounded-ctrl transition-colors w-full justify-center;
+  }
+  .input {
+    @apply w-full border border-line rounded-ctrl px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary/70 bg-white focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary;
+  }
+}
+
+/* thin scrollbars for a clean SaaS look */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cfe0d6 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cfe0d6;
+  border-radius: 8px;
+}

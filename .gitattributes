@@ -1,0 +1,17 @@
+# Normalise line endings so a Windows-authored repo checks out identically on
+# Linux CI and hosting. Without this, git's autocrlf behaviour silently rewrites
+# every source file with CRLF on a fresh clone.
+* text=auto eol=lf
+
+# Windows shell helpers must keep CRLF to be parseable by cmd.exe.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Never attempt text conversion on binary assets.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
