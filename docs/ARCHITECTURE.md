@@ -415,8 +415,10 @@ draft, inert.
 
 1. **No automated UI tests.** `web/` is gated by `tsc` and `vite build` only; regressions in rendering
    or interaction are caught by hand.
-2. **`docs/` sits outside the git repository** (`SMIT/docs` vs `SMIT/hcm-lite`), so documentation is
-   not versioned — and the repository still has **no commits**.
+2. ~~**`docs/` sits outside the git repository**~~ — resolved in session 6: the documents live in
+   `hcm-lite/docs/` and are versioned with the code. History is deliberately short: the first commit
+   is the session 6 tree, because `api/.env` (Atlas credentials) could never be included in a
+   published repository and a `.gitignore` entry does not remove a file from history.
 3. **Screens own their data fetching.** Fine for 14 screens; a shared cache layer would remove
    duplicate requests (for example settings fetched per screen).
 4. **Two database paths must be kept in step.** The in-memory demo seeds itself on boot, while the
