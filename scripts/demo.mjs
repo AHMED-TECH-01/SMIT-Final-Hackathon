@@ -6,7 +6,7 @@
  *   npm run demo                 In-memory MongoDB. Started, seeded and
  *                                discarded with the process. Needs no .env and
  *                                no installed database, so it is always safe.
- *   npm run demo -- --atlas      Uses api/.env, i.e. the configured persistent
+ *   npm run demo -- --atlas      Uses server/.env, i.e. the configured persistent
  *                                MongoDB (a local mongod or an Atlas cluster).
  *                                Run `npm run seed -w api` first if it is
  *                                empty; the seed refuses to overwrite a
@@ -67,6 +67,6 @@ start('[web]', `${npm} run dev -w web`)
 
 process.stdout.write(
   PERSISTENT
-    ? '\nHCM Lite demo starting against the database in api/.env (data is kept)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n'
+    ? '\nHCM Lite demo starting against the database in server/.env (data is kept)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n'
     : '\nHCM Lite demo starting with an in-memory database (data is discarded on exit)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n',
 )

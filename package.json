@@ -5,7 +5,7 @@
   "description": "HCM Lite — MERN Human Capital Management system",
   "workspaces": [
     "web",
-    "api"
+    "server"
   ],
   "engines": {
     "node": ">=20.12"

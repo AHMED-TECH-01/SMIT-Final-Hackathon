@@ -16,6 +16,8 @@ build/
 
 # Vercel CLI link state (project id only, but keep the repo clean)
 .vercel/
+# Scratch directory used by the Vercel deploy workflow (temp scripts + login log)
+.vercel-tmp/
 
 # Logs
 logs/

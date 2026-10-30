@@ -20,14 +20,18 @@ Development  http://localhost:5173
               └─ one `api` client — every screen is wired to the real API
 
 Production  one origin
-  └─ hcm-lite/api   Express 4 + TS + Mongoose 8
+  └─ hcm-lite/server   Express 4 + TS + Mongoose 8   (npm workspace still named `api`)
         ├─ 16 route modules (see §2)
         ├─ services: attendance policy, leave balances, payroll, working days, audit, notify
         ├─ static handler: web/dist + SPA fallback for anything outside /api/v1
         └─ MongoDB
-              ├─ persistent: MONGODB_URI from api/.env (Atlas, or any reachable server)
+              ├─ persistent: MONGODB_URI from server/.env (Atlas, or any reachable server)
               ├─ `npm run demo`: throwaway mongodb-memory-server instance, seeded on boot
-              └─ serverless:  api/src/vercel-handler.ts exports the same app (see §7)
+              └─ serverless:  server/src/vercel-handler.ts exports the same app (see §7)
+
+  hcm-lite/api/  holds exactly one file — `api/[...path].js`, the Vercel Function entry.
+  Vercel turns every file inside `api/` into a Serverless Function, so the backend must not live
+  there (see §7 and D32).
 ```
 
 There is no mock data path left in the frontend: `web/src/features/announcements/*` (the old static
@@ -274,7 +278,7 @@ needs no API key, so the demo works offline and cannot hallucinate a figure.
 
 ## 7. The seed and the demo server
 
-`api/src/scripts/seed.ts` builds the demo dataset with a deterministic PRNG (mulberry32), so the same
+`server/src/scripts/seed.ts` builds the demo dataset with a deterministic PRNG (mulberry32), so the same
 figures appear on every run:
 
 - 1 company, 5 departments, 8 designations, 4 leave types, 6 holidays
@@ -284,10 +288,10 @@ figures appear on every run:
 - 3 payroll runs built by the real `createDraftRun` + `buildRunLines` service (2 finalized, 1 draft)
 - 4 announcements, notifications, audit entries
 
-`runSeed({ reset })` refuses to touch a database that already holds a company. `api/tests/seed.test.ts`
+`runSeed({ reset })` refuses to touch a database that already holds a company. `server/tests/seed.test.ts`
 runs the seed against an in-memory MongoDB and reads the result back through the HTTP API.
 
-`api/src/scripts/dev.ts` (`npm run dev:mem`) starts a `mongodb-memory-server` instance, sets
+`server/src/scripts/dev.ts` (`npm run dev:mem`) starts a `mongodb-memory-server` instance, sets
 `MONGODB_URI` before `config/env.ts` is imported, seeds with `reset: true`, then imports `server.ts`.
 Root `scripts/demo.mjs` (`npm run demo`) runs that plus Vite, prefixes the output, and stops both on Ctrl+C.
 
@@ -296,7 +300,7 @@ Root `scripts/demo.mjs` (`npm run demo`) runs that plus Vite, prefixes the outpu
 | Path | Where `MONGODB_URI` comes from | Lifecycle |
 | --- | --- | --- |
 | `npm run demo` | `dev.ts` sets it to an in-memory server | Seeded with `reset: true`, destroyed on exit; no `.env` needed |
-| `npm run demo -- --atlas`, `npm run dev:api` | `api/.env`, loaded by `config/env.ts` via `process.loadEnvFile` | Persistent; seed once by hand |
+| `npm run demo -- --atlas`, `npm run dev:api` | `server/.env`, loaded by `config/env.ts` via `process.loadEnvFile` | Persistent; seed once by hand |
 
 `config/env.ts` validates and freezes the environment at import time, which is why nothing that
 transitively imports it (the logger included) may run before `MONGODB_URI` exists. `loadEnvFile`
@@ -316,9 +320,9 @@ process is started:
 
 | Entry point | Used by | What it adds |
 | --- | --- | --- |
-| `src/server.ts` | `npm run dev`, `npm run start` | Connects, bootstraps an admin from env if the DB is empty, `listen`, SIGINT/SIGTERM shutdown |
-| `src/scripts/dev.ts` | `npm run demo` | In-memory MongoDB, `reset: true` seed, then imports `server.ts` |
-| `src/vercel-handler.ts` | `api/[...path].js` (the Vercel Function entry) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
+| `server/src/server.ts` | `npm run dev`, `npm run start` | Connects, bootstraps an admin from env if the DB is empty, `listen`, SIGINT/SIGTERM shutdown |
+| `server/src/scripts/dev.ts` | `npm run demo` | In-memory MongoDB, `reset: true` seed, then imports `server.ts` |
+| `server/src/vercel-handler.ts` | `api/[...path].js` (the one Vercel Function) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
 
 ### vercel.json
 
@@ -326,26 +330,26 @@ The deployment is a **monorepo with a static SPA and one catch-all API function*
 
 ```jsonc
 {
-  "buildCommand": "npm run build",     // api tsc + vite build, at the repo root
+  "buildCommand": "npm run build",     // server tsc + vite build, at the repo root
   "outputDirectory": "web/dist",       // Vercel serves the SPA, incl. hashed assets
   "installCommand": "npm ci --include=dev",   // devDependencies are needed by the build
   "framework": null,                   // nothing to auto-detect
-  "functions": { "api/[...path].js": { "maxDuration": 30, "memory": 1024 } },
+  "functions": { "api/[...path].js": { "maxDuration": 30 } },
   "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
 }
 ```
 
 Why each piece is there:
 
-- **`buildCommand` before the function.** `api/dist` is git-ignored and must exist when Vercel traces
+- **`buildCommand` before the function.** `server/dist` is git-ignored and must exist when Vercel traces
   the function, so the build runs on the platform rather than the file being shipped from the clone.
 - **`--include=dev` in `installCommand`.** The build needs `tsc` and `vite`, which are
   devDependencies. This is belt-and-braces insurance against any environment that still arrives with
   `NODE_ENV=production` set.
-- **`api/[...path].js` is the route.** Vercel derives the URL from the path under `api/`: the catch-all
-  name maps `/api/*` to one function and forwards the original URL, which the Express app needs
-  because its routers are mounted under `/api/v1`. The file only re-exports
-  `./dist/vercel-handler.js`, so the deployed code is exactly what `npm run build` produced. An
+- **`api/[...path].js` is the only file in `api/`.** Vercel derives the URL from the path under `api/`:
+  the catch-all name maps `/api/*` to one function and forwards the original URL, which the Express app
+  needs because its routers are mounted under `/api/v1`. The file re-exports
+  `../server/dist/vercel-handler.js`, so the deployed code is exactly what `npm run build` produced. An
   `api/index.js` would have matched `/api` alone, not `/api/v1/health`.
 - **Inside the function, static serving switches itself off.** `resolveWebRoot()` searches for
   `web/dist` and finds nothing in the bundle (a runtime `fs` read is invisible to the tracer), so it
@@ -357,6 +361,13 @@ Why each piece is there:
   `builds`) skips the project's build command, so a git-based deploy would reference an entry that
   does not exist. Its companion `@vercel/static-build` option was also spelled `distDirectory`;
   `distDir` is the real key, so the static output would not have been published either.
+- **The backend is in `server/`, not `api/`, because `api/` is reserved.** Vercel compiles *every*
+  file inside `api/` into a Serverless Function — the workspace held 64 source files and the build
+  added 126 compiled ones — and the Hobby plan caps a deployment at 12. That limit
+  (`errorCode: exceeded_serverless_functions_per_deployment`, step `patchBuild`) is what failed three
+  otherwise successful builds: the platform log said `Build Completed in /vercel/output`, then
+  `Deploying outputs...` and a bare `● Error`, with the real message only visible through
+  `GET /v13/deployments/<id>`. `api/` now holds the single catch-all shim.
 
 **`NODE_ENV` must never be a Vercel environment variable.** Production variables are also injected
 into the build, and npm then omits devDependencies — exactly the `tsc` and `vite` binaries the build
@@ -366,7 +377,7 @@ the tooling present, and `config/env.ts` derives the runtime environment from Ve
 `VERCEL_ENV` marker via the exported pure helper `inferNodeEnv()`. That still matters for more than
 logging: `lib/logger.ts` picks the `pino-pretty` transport whenever `NODE_ENV` is not `production`
 (`pino-pretty` is a devDependency and is absent from the function bundle), and `isProd` decides
-whether the session cookie is `Secure`. An explicit `NODE_ENV` always wins, so `api/.env` keeps the
+whether the session cookie is `Secure`. An explicit `NODE_ENV` always wins, so `server/.env` keeps the
 local developer experience unchanged — the derivation only fires where nothing declared one, which is
 exactly the shape of a deployed function.
 
@@ -393,7 +404,7 @@ blocked, because the bundle is same-origin, there are no inline scripts, and Goo
 | Framework | Vitest + Supertest — `createApp()` returns the app, so no port is bound |
 | Database | `mongodb-memory-server`; unique indexes are created with `Model.init()` before assertions |
 | Determinism | `fileParallelism: false`, sequential tests, `clearTestDb()` + `resetLoginRateLimit()` + `invalidateCompanySettings()` in `beforeEach` |
-| Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `api/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
+| Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `server/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
 | Static serving | `createApp(webRoot)` takes the root as a parameter, so the middleware is testable even though the default under `NODE_ENV=test` is deliberately off |
 | Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–110 s |
 | Scope | 16 files / 213 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web |
@@ -461,6 +472,7 @@ draft, inert.
 | D29 | Helmet's default CSP is kept, not loosened | Verified to block nothing in this app; a permissive CSP chosen to make a demo work is the one thing that would have to be reversed later |
 | D30 | `vercel.json` uses `buildCommand` + `functions` + `rewrites`, not the legacy `builds` / `routes` pair | Micro mode skips the project's build command, so a `builds` entry pointing at the git-ignored `api/dist` could never resolve on a git deploy; the modern keys also let Vercel trace the compiled handler after `npm run build` |
 | D31 | `NODE_ENV` is never a Vercel variable; production is inferred from `VERCEL_ENV` | Production variables are injected into the build too, and `NODE_ENV=production` makes `npm ci` drop devDependencies, so `tsc`/`vite` vanish and the build exits 127 — this is precisely how the first two production deploys failed. Vercel guarantees `VERCEL_ENV` at function runtime, so `inferNodeEnv()` rides on that instead and still gets the `pino-pretty`-free logger and the `Secure` cookie |
+| D32 | The Express workspace lives in `server/` and `api/` holds only the function shim | Vercel treats every file under `api/` as a Serverless Function and the Hobby plan allows at most 12 per deployment. The directory name is the platform's routing contract, so the code moved rather than the plan. The npm workspace is still *named* `api`, so every `-w api` script kept working |
 
 ---
 
@@ -470,7 +482,7 @@ draft, inert.
    or interaction are caught by hand.
 2. ~~**`docs/` sits outside the git repository**~~ — resolved in session 6: the documents live in
    `hcm-lite/docs/` and are versioned with the code. History is deliberately short: the first commit
-   is the session 6 tree, because `api/.env` (Atlas credentials) could never be included in a
+   is the session 6 tree, because `server/.env` (Atlas credentials) could never be included in a
    published repository and a `.gitignore` entry does not remove a file from history.
 3. **Screens own their data fetching.** Fine for 14 screens; a shared cache layer would remove
    duplicate requests (for example settings fetched per screen).
@@ -481,10 +493,10 @@ draft, inert.
 6. **The `openai` assistant provider is untested against a real endpoint.**
 7. **Routes and services share a file** in the smaller modules (analytics, audit, notifications); the
    larger ones (payroll, leave, attendance) are already split.
-8. 🔴 **The Atlas password was disclosed in plain text** and is live in `api/.env`. It must be
-   rotated before this configuration is used for anything real. `api/.env` is git-ignored, so the
+8. 🔴 **The Atlas password was disclosed in plain text** and is live in `server/.env`. It must be
+   rotated before this configuration is used for anything real. `server/.env` is git-ignored, so the
    exposure is the conversation and the file on disk, not the repository.
-9. **The serverless path is unbuilt, not just untested.** `vercel-handler.ts` compiles and the local
+9. **The serverless path is unproven on the platform.** `vercel-handler.ts` compiles and the local
    production build is proven, but no function has ever run on Vercel: cold-start latency against a
    WAN-round-trip Atlas cluster, the `routes` prefix behaviour, and the request-size limits on payslip
    PDFs are all still assumptions.

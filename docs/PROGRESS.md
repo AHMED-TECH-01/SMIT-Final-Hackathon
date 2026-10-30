@@ -4,8 +4,13 @@
 > Read this file (and `docs/ARCHITECTURE.md`) at the start of every work session.
 >
 > **Rule enforced here:** an item is only marked ✅ when it has (a) a working implementation,
-> (b) server-side authorization, and (c) at least one test that was actually executed and passed.
-> Anything else stays 🟡 or ❌. No exceptions.
+(b) server-side authorization, and (c) at least one test that was actually executed and passed.
+Anything else stays 🟡 or ❌. No exceptions.
+
+> **Deployment note:** the backend workspace folder was renamed `api/` → `server/` in session 6,
+> because Vercel compiles every file under `api/` into a Serverless Function and the Hobby plan caps a
+> deployment at 12. The npm workspace is still *named* `api`, so `npm -w api` is unchanged.
+> Verification rows from earlier sessions keep the paths they were run with.
 
 **Last updated:** 2026-10-30 (session 6)
 **Overall status:** 🟢 **All 12 phases delivered.** 16 test suites / **213 tests** pass, the production
@@ -14,9 +19,10 @@ against a persistent MongoDB Atlas cluster, and it now serves the built UI from 
 it is deployable as one service.
 **Demo readiness:** ✅ `npm run demo` boots an in-memory database, seeds it and serves the UI;
 `npm run demo -- --atlas` keeps data; `npm run build && npm run start` serves UI + API on :4000.
-**Deployment:** 🟡 project linked to Vercel and the GitHub repo connected; the first two production
-builds failed and the cause is fixed in code (`NODE_ENV` must not be a Vercel variable — see
-*Deploying to Vercel*). A redeploy is the remaining step.
+**Deployment:** 🟡 project linked to Vercel and the GitHub repository connected. Three production
+builds completed and then failed at deploy time for two platform limits that are now designed around:
+`NODE_ENV` must not be a Vercel variable, and `api/` may not contain the backend (Hobby caps a
+deployment at 12 Serverless Functions). The layout is fixed; a successful deploy is still unproven.
 **Outstanding risk:** 🔴 the Atlas password was shared in plain text — see limitation 7.
 
 ---
@@ -36,7 +42,7 @@ builds failed and the cause is fixed in code (`NODE_ENV` must not be a Vercel va
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Monorepo (npm workspaces `web` + `api`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed` |
+| Monorepo (npm workspaces `web` + `server`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed`. The `server/` folder is still the workspace *named* `api`, and root `api/` holds only the Vercel Function shim |
 | Backend API | ✅ | 16 route modules, **213 tests** pass |
 | MongoDB persistence | ✅ | Runs on the in-memory server **and** against a live Atlas cluster (seed/read/write/delete verified) |
 | Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build |
@@ -76,6 +82,9 @@ builds failed and the cause is fixed in code (`NODE_ENV` must not be a Vercel va
 | 9 | `vercel env rm NODE_ENV production` + `installCommand: "npm ci --include=dev"` + `inferNodeEnv()` in `config/env.ts` | ✅ the environment is now derived from Vercel's `VERCEL_ENV`, which is guaranteed at function runtime and invisible to the build |
 | 10 | `npx vitest run --root api` | ✅ **16 files, 213 tests passed**, 68.00 s (3 new `inferNodeEnv` tests) |
 | 11 | Simulated function: `node api/dist/server.js` with `cwd: web/` and no `.env` reachable | ✅ `env: "production"`, JSON logs (no `pino-pretty` transport attempt), login cookie `HttpOnly; Secure; SameSite=Lax` — the derivation works where a deployed function runs it. The first attempt from `api/` proved nothing: `loadDotEnv()` found `api/.env`, whose `NODE_ENV=development` correctly wins over the inference |
+| 12 | `vercel deploy --prod` after that fix (and the identical auto-build from the push) | ❌ build **succeeded** (397 packages, `Build Completed in /vercel/output`) but `Deploying outputs...` → `● Error`. The API answered `errorCode: exceeded_serverless_functions_per_deployment` — "No more than 12 Serverless Functions can be added to a Deployment on the Hobby plan" at step `patchBuild` |
+| 13 | `git mv api server`, root `api/` recreated with only `[...path].js` re-exporting `../server/dist/vercel-handler.js`; `workspaces: ["web", "server"]` | ✅ `npm install` + `npm run typecheck` exit 0; `npm run build` clean; **16 files, 213 tests passed** (84.61 s); `resolveWebRoot()` from `server/` still finds `web/dist`; importing the shim resolves the handler (it fails only on the missing `.env` at repo-root cwd, which the platform supplies) |
+| 14 | `vercel inspect --logs` vs `GET /v13/deployments/<id>` | ⚠️ the CLI shows a bare `● Error` with no reason; the deployment object's `errorMessage` is the only place the real cause appears. Worth remembering for every future Vercel failure |
 
 ### Session 5 (2026-10-30) — persistent MongoDB Atlas cluster
 
@@ -130,7 +139,7 @@ time. No transaction is used anywhere in the API, so Atlas tier limits are not a
 
 **Test database:** `mongodb-memory-server`, always. `tests/setup-env.ts` sets `MONGODB_URI` and
 `JWT_SECRET` before any application module is imported, and `process.loadEnvFile` deliberately does
-**not** overwrite variables that are already set — so a populated `api/.env` cannot redirect the
+**not** overwrite variables that are already set — so a populated `server/.env` cannot redirect the
 suite at a real database. Verified in session 5 (fingerprint unchanged before/after a full run).
 
 ### Explicitly *not* verified
@@ -169,10 +178,10 @@ Open <http://localhost:5173> and sign in with:
 | Command | Database | Use for |
 | --- | --- | --- |
 | `npm run demo` | In-memory, seeded on boot, **discarded on exit**. Needs no `.env`. | Screenshots, demos, trying anything destructive |
-| `npm run demo -- --atlas` | Whatever `api/.env` points at. **Data is kept.** | Work you want to survive a restart |
+| `npm run demo -- --atlas` | Whatever `server/.env` points at. **Data is kept.** | Work you want to survive a restart |
 | `npm run dev:api` + `npm run dev:web` | Same as `--atlas`, two terminals | Watching logs separately |
 
-The repo currently has a working `api/.env` pointing at the `hcm_lite` database of an Atlas cluster.
+The repo currently has a working `server/.env` pointing at the `hcm_lite` database of an Atlas cluster.
 It is git-ignored (`.gitignore` line 12 covers `.env`; confirmed with `git check-ignore -v`). To
 recreate it from scratch, copy `.env.example` and set:
 
@@ -192,7 +201,7 @@ npm run start                      # http://localhost:4000 serves the UI *and* /
 node scripts/verify-prod.mjs       # smoke check: shell, assets, deep links, API 404s, login
 ```
 
-`npm run start` runs `node dist/server.js`; `api/src/middleware/static-web.ts` locates `web/dist`
+`npm run start` runs `node dist/server.js`; `server/src/middleware/static-web.ts` locates `web/dist`
 relative to the working directory (or an explicit `WEB_ROOT`) and mounts it **after** the API routes
 and **before** the 404 handler, so `/api/*` stays JSON and every other path returns the shell.
 With `NODE_ENV=production` the session cookie carries `Secure`; Chrome treats `http://localhost` as
@@ -216,7 +225,7 @@ Production environment variables, all stored as **Sensitive** (they cannot be pu
 
 | Variable | Value |
 | --- | --- |
-| `MONGODB_URI` | the same non-SRV Atlas URI as `api/.env`, pointing at the already-seeded `hcm_lite` database |
+| `MONGODB_URI` | the same non-SRV Atlas URI as `server/.env`, pointing at the already-seeded `hcm_lite` database |
 | `JWT_SECRET` | freshly generated — deliberately **not** the local development secret |
 
 **`NODE_ENV` must not be a Vercel variable, and has been removed.** It looks necessary (the logger
@@ -232,12 +241,17 @@ Two deliberate omissions: `CORS_ORIGINS` (UI and API share one origin, so no cro
 ever made) and `ADMIN_EMAIL` / `ADMIN_PASSWORD` (the Atlas database is already seeded; adding demo
 credentials to a public deployment would only invite abuse).
 
-**Not yet verified:** the redeploy after the `NODE_ENV` fix. The two deploys that did run both errored
-in the build, so nothing has been reachable on a Vercel URL yet, and the Atlas cluster has not been
-reached from Vercel's egress addresses (Network Access must allow them — Vercel functions have no
-fixed egress IP). `vercel build --prod` cannot validate any of this here — it fails inside this shell
-with `Error: spawn cmd.exe ENOENT` before running the build command, an environment problem and not
-evidence about the config.
+**Not yet verified:** a deployment that reaches `READY`. The last three builds all compiled
+successfully on the platform and then failed while deploying the output, for the two reasons above —
+both are now fixed in the repository, but nothing has been reachable on a Vercel URL yet, and the
+Atlas cluster has never been reached from Vercel's egress addresses (Network Access must allow them;
+Vercel functions have no fixed egress IP, so `0.0.0.0/0` is the practical answer). `vercel build
+--prod` cannot validate any of this here — it fails inside this shell with `Error: spawn cmd.exe
+ENOENT` before running the build command, an environment problem and not evidence about the config.
+
+To read why a deployment fails when the CLI only prints `● Error`:
+`GET https://api.vercel.com/v13/deployments/<id>?teamId=<id>` with the CLI token returns
+`errorCode`, `errorMessage` and `errorStep`.
 
 ---
 
@@ -362,9 +376,9 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Defect | Impact | Fix |
 | --- | --- | --- |
-| `mongodb+srv://` bootstrap depends on a DNS SRV lookup that Node's c-ares resolver fails locally | `npm run seed` died with `querySrv ECONNREFUSED`, looking like an Atlas/IP-allowlist problem when the cluster was healthy | `api/.env` now holds the equivalent non-SRV multi-seed URI (all three shard hosts, `:27017`, `tls=true`, `authSource=admin`); documented in the file itself |
+| `mongodb+srv://` bootstrap depends on a DNS SRV lookup that Node's c-ares resolver fails locally | `npm run seed` died with `querySrv ECONNREFUSED`, looking like an Atlas/IP-allowlist problem when the cluster was healthy | `server/.env` now holds the equivalent non-SRV multi-seed URI (all three shard hosts, `:27017`, `tls=true`, `authSource=admin`); documented in the file itself |
 | The Atlas URI as supplied ended in `/`, which makes the driver default to the `test` database | HCM Lite would have written into whatever already lived in `test` | Pinned a dedicated `hcm_lite` database in the connection string |
-| `npm run demo` could only ever run the throwaway database | No one-command way to keep data between restarts | `npm run demo -- --atlas` starts the same process tree against `api/.env` |
+| `npm run demo` could only ever run the throwaway database | No one-command way to keep data between restarts | `npm run demo -- --atlas` starts the same process tree against `server/.env` |
 
 ### Session 4
 
@@ -390,26 +404,27 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 4. **The assistant's `openai` provider is unexercised live** (no API key). Default `rules` mode is
    what the demo uses.
 5. **Two database modes.** `npm run demo` is ephemeral by design and re-seeds on every boot;
-   `npm run demo -- --atlas` writes to the cluster in `api/.env` and keeps everything.
+   `npm run demo -- --atlas` writes to the cluster in `server/.env` and keeps everything.
 6. **Payroll tax is a fixed demo rule**, not a jurisdiction-accurate calculator.
 7. 🔴 **Credentials in circulation.** The Atlas connection string was pasted into this conversation
    in plain text, so treat that password as compromised: rotate it in Atlas → Database Access, and
-   update `api/.env` to match. The same paste contained an unrelated API key that
+   update `server/.env` to match. The same paste contained an unrelated API key that
    matches no service this project uses — revoke it wherever it came from. The supplied JWT was the
    public `jwt.io` sample token (`sub: 1234567890`, issued 2018) and is of no use as a credential.
-   None of these were committed (`api/.env` is git-ignored) and none were stored in memory; the
-   `JWT_SECRET` in `api/.env` was generated locally and never printed.
+   None of these were committed (`server/.env` is git-ignored) and none were stored in memory; the
+   `JWT_SECRET` in `server/.env` was generated locally and never printed.
 8. **The Atlas cluster is reachable from this one IP** (`153.117.38.141`). If Atlas Network Access is
    restricted, deploying anywhere else requires adding that host's egress — and Vercel has no fixed
    egress IP, so publishing there means setting access to `0.0.0.0/0`. That choice has been made
    deliberately, with the understanding that the **leaked password must be rotated promptly**, because
    while it is live the cluster is reachable from the whole internet.
-9. **The Vercel deploy itself is unverified.** `vercel.json`, `api/src/vercel-handler.ts` and the
-   production same-origin path are all proven *locally*; nothing has run on Vercel yet, because the
-   CLI is not logged in. Two specific unknowns: how the serverless runtime reports a missing
-   `web/dist` (the static build is served by the platform there, not by Express), and whether the
-   `routes` rewrite preserves the `/api/v1/...` prefix the Express app mounts on. Expect to correct
-   this config on the first real deploy.
+9. **The Vercel deploy itself is unverified.** `vercel.json`, `server/src/vercel-handler.ts` and the
+   production same-origin path are all proven *locally*, and three builds have compiled on the
+   platform, but none reached `READY` — first the injected `NODE_ENV`, then the Hobby limit of 12
+   Serverless Functions per deployment. Two specific unknowns remain: how the serverless runtime
+   reports a missing `web/dist` (the static build is served by the platform there, not by Express)
+   and whether Vercel forwards the full original URL to the function, which the Express app needs to
+   match its `/api/v1/...` mount. Expect to correct this config on the first real deploy.
 10. **`frame-ancestors 'self'` blocks embedding.** Helmet's default CSP means the deployed app will
     not render inside an iframe (including an in-editor preview). Open it in a normal browser tab.
 
@@ -419,10 +434,10 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Item | Suggested action |
 | --- | --- |
-| 🔴 Leaked Atlas password | Rotate in Atlas → Database Access, then update `MONGODB_URI` in `api/.env` |
+| 🔴 Leaked Atlas password | Rotate in Atlas → Database Access, then update `MONGODB_URI` in `server/.env` |
 | 🔴 Unrecognised API key from the same paste | Revoke at whichever provider issued it; it is not used by this project |
 | Atlas Network Access scope | Confirm the allowlist is this IP only, not `0.0.0.0/0` |
-| No commit yet | First commit lands in session 6 with the push to GitHub — `api/.env` stays out |
+| No commit yet | First commit landed in session 6 with the push to GitHub — `server/.env` stays out |
 | Docs not versioned | ✅ Resolved in session 6: `docs/` moved inside `hcm-lite/` |
 | Deploy unverified | Log in (`vercel login`), deploy, then re-run `node scripts/verify-prod.mjs https://<url>` and fix `vercel.json` if the rewrite misbehaves |
 | No frontend tests | Add Vitest + React Testing Library for the screens that carry logic |
@@ -435,6 +450,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
+| 2026-10-30 | Session 6 (cont. 2): the two fixed deploys then failed at `patchBuild` with `exceeded_serverless_functions_per_deployment` — Vercel compiles **every** file under `api/` into a Serverless Function and the Hobby plan allows 12. Renamed the backend workspace folder `api/` → `server/` (`git mv`, 100% rename similarity), leaving `api/[...path].js` as the only file there and re-exporting `../server/dist/vercel-handler.js`; dropped the ignored `memory` key from `vercel.json`. Root `workspaces` is now `web` + `server`; the npm package is still named `api`, so every script and test command is unchanged. Verified: typecheck 0, build clean, **213 tests**, `resolveWebRoot()` → `web/dist`, shim resolves the handler. Docs updated (`server/.env` everywhere, new §7 bullets, D32). | Qoder |
 | 2026-10-30 | Session 6 (cont.): logged in to Vercel, linked `hcm-lite` and connected the GitHub repository. The first two production builds errored in 7 s — my own `NODE_ENV=production` variable was injected into the build, so `npm ci` installed 129 of 396 packages and `npm run build` exited 127. Fixed by removing that variable, setting `installCommand: "npm ci --include=dev"`, and adding `inferNodeEnv()` in `config/env.ts` to derive production from Vercel's `VERCEL_ENV`; guarded by 3 new tests (**213** now pass) and reproduced under a deployed function's shape (`env: "production"`, cookie `Secure`). Also re-asserted `!.env.example` after the `.env*` rule that the Vercel CLI appended to `.gitignore`. | Qoder |
 | 2026-10-30 | Session 6: moved `docs/` inside `hcm-lite/` so the documents are versioned and repaired the `.gitignore` encoding damage; added production same-origin serving (`middleware/static-web.ts`: `express.static(web/dist)` after the API routers, SPA fallback before the 404 handler, plus 7 tests); added the serverless entry point `api/src/vercel-handler.ts` and `vercel.json`; documented the deployment environment. Re-ran typecheck, **210 tests**, the production build and a live `NODE_ENV=production` serve (shell `no-cache`, hashed assets `immutable`, deep link served, unknown `/api/v1/*` still JSON 404, login cookie `HttpOnly; Secure; SameSite=Lax`). Made the first commit and pushed to GitHub with `api/.env` excluded. | Qoder |
 | 2026-10-30 | Session 5: created git-ignored `api/.env` with a locally generated `JWT_SECRET`; diagnosed the Node SRV-resolution failure and switched to a non-SRV Atlas URI pinned to a dedicated `hcm_lite` database; seeded Atlas (13 employees / 384 attendance / 7 leave requests); verified 13 endpoints, RBAC denials, all assistant intents and a create→read→delete round-trip through the Vite proxy; added `npm run demo -- --atlas`; re-ran the **203 tests** and proved by fingerprint that they never touch the cluster. No application defects found. | Qoder |

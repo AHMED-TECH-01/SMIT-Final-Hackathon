@@ -6,7 +6,7 @@ import type { Express } from 'express'
 import { env, isTest } from '../config/env.js'
 import { logger } from '../lib/logger.js'
 
-/** `api/src/` when running from source, `api/dist/` when compiled. */
+/** `server/src/` when running from source, `server/dist/` when compiled. */
 const MODULE_ROOT = fileURLToPath(new URL('../', import.meta.url))
 
 /**
@@ -18,9 +18,9 @@ function searchPaths(): string[] {
   return [
     // Working directory is the repository root (Vercel, or `npm run start` there).
     resolve(process.cwd(), 'web/dist'),
-    // Working directory is the `api` workspace.
+    // Working directory is the backend workspace (`server/`).
     resolve(process.cwd(), '../web/dist'),
-    // Resolved from this file instead: api/dist or api/src.
+    // Resolved from this file instead: server/dist or server/src.
     resolve(MODULE_ROOT, '../../web/dist'),
     resolve(MODULE_ROOT, '../../../web/dist'),
   ]
