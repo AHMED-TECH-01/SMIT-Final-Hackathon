@@ -318,15 +318,56 @@ process is started:
 | --- | --- | --- |
 | `src/server.ts` | `npm run dev`, `npm run start` | Connects, bootstraps an admin from env if the DB is empty, `listen`, SIGINT/SIGTERM shutdown |
 | `src/scripts/dev.ts` | `npm run demo` | In-memory MongoDB, `reset: true` seed, then imports `server.ts` |
-| `src/vercel-handler.ts` | `vercel.json` → `@vercel/node` | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
+| `src/vercel-handler.ts` | `api/[...path].js` (the Vercel Function entry) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
+
+### vercel.json
+
+The deployment is a **monorepo with a static SPA and one catch-all API function**:
+
+```jsonc
+{
+  "buildCommand": "npm run build",     // api tsc + vite build, at the repo root
+  "outputDirectory": "web/dist",       // Vercel serves the SPA, incl. hashed assets
+  "installCommand": "npm ci",
+  "framework": null,                   // nothing to auto-detect
+  "functions": { "api/[...path].js": { "maxDuration": 30, "memory": 1024 } },
+  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
+}
+```
+
+Why each piece is there:
+
+- **`buildCommand` before the function.** `api/dist` is git-ignored and must exist when Vercel traces
+  the function, so the build runs on the platform rather than the file being shipped from the clone.
+- **`api/[...path].js` is the route.** Vercel derives the URL from the path under `api/`: the catch-all
+  name maps `/api/*` to one function and forwards the original URL, which the Express app needs
+  because its routers are mounted under `/api/v1`. The file only re-exports
+  `./dist/vercel-handler.js`, so the deployed code is exactly what `npm run build` produced. An
+  `api/index.js` would have matched `/api` alone, not `/api/v1/health`.
+- **Inside the function, static serving switches itself off.** `resolveWebRoot()` searches for
+  `web/dist` and finds nothing in the bundle (a runtime `fs` read is invisible to the tracer), so it
+  logs "No frontend build found" and serves JSON only — which is correct here, because Vercel serves
+  the SPA from `outputDirectory`. The one job the rewrite does is the SPA's history router: any path
+  that is not `/api/...` and not a real file returns the shell.
+- **Legacy `builds` / `routes` was wrong and is gone.** The first version of this file pinned
+  `{ "src": "api/dist/vercel-handler.js", "use": "@vercel/node" }`, but micro mode (any config with
+  `builds`) skips the project's build command, so a git-based deploy would reference an entry that
+  does not exist. Its companion `@vercel/static-build` option was also spelled `distDirectory`;
+  `distDir` is the real key, so the static output would not have been published either.
+
+`NODE_ENV=production` is set as a **runtime** environment variable, not only a build one:
+`lib/logger.ts` picks the `pino-pretty` transport whenever `NODE_ENV` is not `production`, and
+`pino-pretty` is a devDependency that is not in the function bundle — a request that initialises the
+logger with the wrong `NODE_ENV` would fail on a missing transport.
 
 `middleware/static-web.ts` is what makes a single host possible: the frontend calls the relative path
-`/api/v1`, so UI and API must share an origin. In development Vite's proxy provides that; in
-production `createApp()` mounts `express.static(web/dist)` **after** the API routers and **before**
-the 404 handler, then a `GET *` fallback returns `index.html` for anything that is not under
-`/api/v1`. Assets are cached `max-age=31536000, immutable` (Vite fingerprints them) while the shell is
-`no-cache`, so a deploy cannot be masked by a stale bundle list. `WEB_ROOT` overrides the search when
-the layout is unusual.
+`/api/v1`, so UI and API must share an origin. In development Vite's proxy provides that; on a single
+long-running host (`npm run start`) `createApp()` mounts `express.static(web/dist)` **after** the API
+routers and **before** the 404 handler, then a `GET *` fallback returns `index.html` for anything that
+is not under `/api/v1`. Assets are cached `max-age=31536000, immutable` (Vite fingerprints them) while
+the shell is `no-cache`, so a deploy cannot be masked by a stale bundle list. `WEB_ROOT` overrides the
+search when the layout is unusual. On Vercel the same requirement is met by the platform instead —
+`outputDirectory` + the rewrite — and the function deliberately serves JSON only.
 
 `helmet()` runs with its default CSP. Verified against the built app in a browser: nothing is
 blocked, because the bundle is same-origin, there are no inline scripts, and Google Fonts falls under
@@ -408,6 +449,8 @@ draft, inert.
 | D27 | `web/dist` is located by search, not hard-coded | The same build must work from `api/`, from the repo root, and from a serverless working directory; `WEB_ROOT` wins when the guess is wrong |
 | D28 | One `createApp()`, several entry points | Serverless, long-running and in-memory demo differ only in process lifecycle, so no behaviour is duplicated — and therefore cannot drift |
 | D29 | Helmet's default CSP is kept, not loosened | Verified to block nothing in this app; a permissive CSP chosen to make a demo work is the one thing that would have to be reversed later |
+| D30 | `vercel.json` uses `buildCommand` + `functions` + `rewrites`, not the legacy `builds` / `routes` pair | Micro mode skips the project's build command, so a `builds` entry pointing at the git-ignored `api/dist` could never resolve on a git deploy; the modern keys also let Vercel trace the compiled handler after `npm run build` |
+| D31 | `NODE_ENV=production` is a runtime variable on Vercel | Without it the logger asks for the `pino-pretty` transport, which is a devDependency and is not in the function bundle, so the first request would fail on startup rather than on a route |
 
 ---
 

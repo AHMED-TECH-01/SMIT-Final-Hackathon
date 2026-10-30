@@ -193,6 +193,38 @@ and **before** the 404 handler, so `/api/*` stays JSON and every other path retu
 With `NODE_ENV=production` the session cookie carries `Secure`; Chrome treats `http://localhost` as
 trustworthy so login still works locally, but a real deployment must terminate TLS.
 
+### Deploying to Vercel
+
+The project is linked (`hcm-lite`, scope `ahmed-tech-01s-projects`) and the GitHub repository is
+connected, so a push to `main` builds production.
+
+| Step | Command | Note |
+| --- | --- | --- |
+| 1 | `vercel login` | Browser device authorisation — only the user can approve it |
+| 2 | `vercel link --yes` | Creates the project, writes `.vercel/` (git-ignored), connects GitHub |
+| 3 | `vercel pull --yes --environment=production` | **Required before `vercel build`**, which otherwise stops at "No Project Settings found locally" |
+| 4 | `vercel env add <NAME> production` | Feeds the value on stdin so it never reaches the shell history or the logs |
+| 5 | `vercel deploy --prod` | The build runs on Vercel's infrastructure |
+
+Production environment variables, all stored as **Sensitive** (they cannot be pulled back down;
+`vercel pull` writes `[SENSITIVE]` placeholders for them):
+
+| Variable | Value |
+| --- | --- |
+| `MONGODB_URI` | the same non-SRV Atlas URI as `api/.env`, pointing at the already-seeded `hcm_lite` database |
+| `JWT_SECRET` | freshly generated — deliberately **not** the local development secret |
+| `NODE_ENV` | `production` — required at runtime, not just at build time: `lib/logger.ts` selects the `pino-pretty` transport whenever `NODE_ENV` is not `production`, and `pino-pretty` is a devDependency that is not part of the function bundle. Without it every request would fail while initialising the logger. It also puts the session cookie into `Secure` mode, which is correct behind Vercel's TLS. |
+
+Two deliberate omissions: `CORS_ORIGINS` (UI and API share one origin, so no cross-origin request is
+ever made) and `ADMIN_EMAIL` / `ADMIN_PASSWORD` (the Atlas database is already seeded; adding demo
+credentials to a public deployment would only invite abuse).
+
+**Not yet verified:** no deployment has been created, so the `vercel.json` layout described in
+`ARCHITECTURE.md` §7 has never run on the platform. `vercel build --prod` cannot validate it here —
+it fails inside this shell with `Error: spawn cmd.exe ENOENT` before running the build command, which
+is an environment problem and not evidence about the config. The first real `vercel deploy` is
+therefore the actual test.
+
 ---
 
 ## 5. Phase tracker

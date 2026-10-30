@@ -40,3 +40,8 @@ Thumbs.db
 *.mongo
 data/db/
 dump/
+.vercel
+.env*
+# `.env*` (appended by the Vercel CLI) would otherwise re-ignore the template
+# file, because the last matching pattern wins. Re-assert the exception after it.
+!.env.example
