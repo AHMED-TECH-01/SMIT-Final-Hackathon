@@ -14,7 +14,7 @@ Anything else stays 🟡 or ❌. No exceptions.
 > rather than a `[...path]` filename. The npm workspace is still *named* `api`, so `npm -w api` is
 > unchanged. Verification rows from earlier sessions keep the paths they were run with.
 
-**Last updated:** 2026-10-30 (session 6)
+**Last updated:** 2026-10-31 (session 7 — live audit of the deployed backend)
 **Overall status:** 🟢 **All 12 phases delivered.** 16 test suites / **213 tests** pass, the production
 build succeeds, every screen has been driven against a live API in a real browser, the API runs
 against a persistent MongoDB Atlas cluster, it serves the built UI from the same origin, and **that
@@ -69,6 +69,22 @@ the deployment is now public with seeded demo logins such as `admin@hcm.test`.
 ---
 
 ## 3. Verification log
+
+### Session 7 (2026-10-31) — live audit of the deployed backend
+
+Probed **https://hcm-lite-eta.vercel.app** directly (HTTP level, no browser) after the git-built
+production deployment `hcm-lite-in2e2ziog` reported `● Ready` (32 s).
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | 28 endpoints across all 16 route modules with an admin session | ✅ `200` everywhere a `200` is right: health, auth/me, employees + CSV export, attendance board, leave requests, payroll runs/structures, analytics overview/dashboard/headcount/attendance-trend/leave-usage/payroll-cost, announcements, notifications, audit-log + facets, settings + settings/public, departments, designations, leave-types, holidays, users, assistant suggestions, setup status |
+| 2 | Authorization on the platform, not just in tests | ✅ employee session (`ayesha.khan@hcm.test`): `/analytics/overview` → **403**, `/auth/me` and `/attendance/me` → 200 |
+| 3 | Business rules that reject a sane-looking request | ✅ admin on `/attendance/me` and `/leave/balances` → **422 UNPROCESSABLE** ("account not linked to an employee profile") — correct, the admin has no employee record |
+| 4 | Write path to Atlas through the function | ✅ announcement create → read back (title matched) → DELETE 200 → re-read 404; nothing left behind |
+| 5 | Binary response through a serverless function | ✅ `GET /payroll/payslips/:runId/pdf` → `200 application/pdf`, 2 212 bytes, starts `%PDF-` |
+| 6 | Cold- vs warm-container latency | ✅ ~290 ms per call (`x-vercel-id: bom1::iad1::…`), and `health.uptimeSeconds` kept climbing — the memoised connection/app per container works |
+| 7 | 200 KB JSON body | ❌ **`500 INTERNAL_ERROR` instead of `413`**. Reproduced identically on the local in-memory demo (`npm run demo`, :4000), so it is **not** a platform issue: `express.json({ limit: '100kb' })` raises `entity.too.large`, which is neither an `HttpError` nor a `ZodError`, so `middleware/error-handler.ts` falls through to its generic 500. Practical effect: `/employees/import` with a CSV over ~100 KB fails with an opaque 500 (Vercel's own function body cap is 4.5 MB and was never reached) |
+| 8 | Cleanup | ✅ local demo stopped (port 4000 free), probe scripts deleted |
 
 ### Session 6 (2026-10-30) — production serving, deployment config, repository
 
@@ -461,6 +477,12 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
     `passwordProtection: null`) made the deployment **publicly readable by anyone who has the URL**,
     including the seeded demo accounts. Re-enable it, or move to a custom domain with protection on
     Vercel subdomains, before treating this as anything but a demo.
+12. **A request body over the 100 KB JSON limit answers `500`, not `413`.** `express.json` throws
+    `entity.too.large`, which `middleware/error-handler.ts` does not recognise, so it reaches the
+    generic handler. Measured on the deployed function **and** on the local in-memory demo, so it is an
+    application gap rather than platform behaviour — the visible case is `/employees/import` with a CSV
+    larger than ~100 KB. Nothing else about the deployment is affected: Vercel's own 4.5 MB function
+    body cap is never reached.
 
 ---
 
@@ -476,6 +498,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 | Docs not versioned | ✅ Resolved in session 6: `docs/` moved inside `hcm-lite/` |
 | ~~Deploy unverified~~ | ✅ Deployed and verified: `https://hcm-lite-eta.vercel.app`, re-checked with `node scripts/verify-prod.mjs https://<url>`. `vercel.json` did need two corrections (rewrite instead of `[...path]`, root `"type": "module"`) |
 | Browser walk-through of the deployed URL | The live checks were HTTP-level; drive the deployed UI in a real browser once (CSP is absent there because the platform serves the static build) |
+| ❌ Oversized JSON body answers 500 | Map body-parser errors (`entity.too.large` → **413**, `encoding.unsupported` → 415) in `middleware/error-handler.ts` and add a test; until then tell users to keep `/employees/import` CSVs under ~100 KB |
 | No frontend tests | Add Vitest + React Testing Library for the screens that carry logic |
 | No E2E | Add Playwright for the five-minute demo path |
 | Assistant provider | Add a smoke test against a real endpoint if a key is ever supplied |
@@ -486,6 +509,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
+| 2026-10-31 | Session 7: audited the **deployed** backend live — 28 endpoints, RBAC denial, 422 business rejections, an Atlas write round-trip, the payslip PDF and warm-container latency all confirmed against `https://hcm-lite-eta.vercel.app`. Found one application defect: a JSON body above the 100 KB limit returns `500 INTERNAL_ERROR` instead of `413`, reproduced on the local demo too (limitation 12). No code changed. | Qoder |
 | 2026-10-30 | Session 6 (cont. 3): **the app is live at https://hcm-lite-eta.vercel.app.** The renamed layout reached `● Ready`, but every `/api/v1/*` answered Vercel's own 404: measured with echo functions in a preview, `api/[...path].js` matches a **single** segment. Replaced it with `api/index.js` plus `"rewrites": [{ "source": "/api/:path*", "destination": "/api/index" }]` (the shim drops the `?path=…` parameter Vercel injects), then fixed the cold-start `ERR_REQUIRE_ESM` that followed by declaring `"type": "module"` in the root `package.json`. Turned off Vercel's Deployment Protection, which had been answering the whole URL with an SSO login page. Verified: typecheck 0, build clean, **213 tests**, and `verify-prod.mjs` green against production — SPA, deep link, JSON 404 from Express, login with `HttpOnly; Secure; SameSite=Lax`, 26 permissions, dashboard workforce 12, `/api/v1/health` reporting Atlas connected. Docs updated (§1, §7, limitations 8–11, D33–D34). | Qoder |
 | 2026-10-30 | Session 6 (cont. 2): the two fixed deploys then failed at `patchBuild` with `exceeded_serverless_functions_per_deployment` — Vercel compiles **every** file under `api/` into a Serverless Function and the Hobby plan allows 12. Renamed the backend workspace folder `api/` → `server/` (`git mv`, 100% rename similarity), leaving `api/[...path].js` as the only file there and re-exporting `../server/dist/vercel-handler.js`; dropped the ignored `memory` key from `vercel.json`. Root `workspaces` is now `web` + `server`; the npm package is still named `api`, so every script and test command is unchanged. Verified: typecheck 0, build clean, **213 tests**, `resolveWebRoot()` → `web/dist`, shim resolves the handler. Docs updated (`server/.env` everywhere, new §7 bullets, D32). | Qoder |
 | 2026-10-30 | Session 6 (cont.): logged in to Vercel, linked `hcm-lite` and connected the GitHub repository. The first two production builds errored in 7 s — my own `NODE_ENV=production` variable was injected into the build, so `npm ci` installed 129 of 396 packages and `npm run build` exited 127. Fixed by removing that variable, setting `installCommand: "npm ci --include=dev"`, and adding `inferNodeEnv()` in `config/env.ts` to derive production from Vercel's `VERCEL_ENV`; guarded by 3 new tests (**213** now pass) and reproduced under a deployed function's shape (`env: "production"`, cookie `Secure`). Also re-asserted `!.env.example` after the `.env*` rule that the Vercel CLI appended to `.gitignore`. | Qoder |
