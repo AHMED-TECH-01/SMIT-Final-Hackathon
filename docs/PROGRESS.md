@@ -7,23 +7,26 @@
 (b) server-side authorization, and (c) at least one test that was actually executed and passed.
 Anything else stays 🟡 or ❌. No exceptions.
 
-> **Deployment note:** the backend workspace folder was renamed `api/` → `server/` in session 6,
+> **Deployment note:** the app is live at **https://hcm-lite-eta.vercel.app** (Vercel, production).
+> Two workspace changes came out of getting there: the backend folder was renamed `api/` → `server/`
 > because Vercel compiles every file under `api/` into a Serverless Function and the Hobby plan caps a
-> deployment at 12. The npm workspace is still *named* `api`, so `npm -w api` is unchanged.
-> Verification rows from earlier sessions keep the paths they were run with.
+> deployment at 12, and `/api/*` is routed to the single function by a `vercel.json` `rewrites` entry
+> rather than a `[...path]` filename. The npm workspace is still *named* `api`, so `npm -w api` is
+> unchanged. Verification rows from earlier sessions keep the paths they were run with.
 
 **Last updated:** 2026-10-30 (session 6)
 **Overall status:** 🟢 **All 12 phases delivered.** 16 test suites / **213 tests** pass, the production
 build succeeds, every screen has been driven against a live API in a real browser, the API runs
-against a persistent MongoDB Atlas cluster, and it now serves the built UI from the same origin so
-it is deployable as one service.
+against a persistent MongoDB Atlas cluster, it serves the built UI from the same origin, and **that
+same-origin build is deployed and verified in production**.
 **Demo readiness:** ✅ `npm run demo` boots an in-memory database, seeds it and serves the UI;
 `npm run demo -- --atlas` keeps data; `npm run build && npm run start` serves UI + API on :4000.
-**Deployment:** 🟡 project linked to Vercel and the GitHub repository connected. Three production
-builds completed and then failed at deploy time for two platform limits that are now designed around:
-`NODE_ENV` must not be a Vercel variable, and `api/` may not contain the backend (Hobby caps a
-deployment at 12 Serverless Functions). The layout is fixed; a successful deploy is still unproven.
-**Outstanding risk:** 🔴 the Atlas password was shared in plain text — see limitation 7.
+**Deployment:** ✅ live on Vercel at **https://hcm-lite-eta.vercel.app**, fed by the linked GitHub
+repository. SPA, deep links, login, session cookie, RBAC and a data-backed dashboard were all
+verified against the running deployment. Vercel's own Deployment Protection was turned **off** for
+this project so the URL is publicly reachable — see limitation 11.
+**Outstanding risk:** 🔴 the Atlas password was shared in plain text and has not been rotated — and
+the deployment is now public with seeded demo logins such as `admin@hcm.test`.
 
 ---
 
@@ -45,8 +48,8 @@ deployment at 12 Serverless Functions). The layout is fixed; a successful deploy
 | Monorepo (npm workspaces `web` + `server`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed`. The `server/` folder is still the workspace *named* `api`, and root `api/` holds only the Vercel Function shim |
 | Backend API | ✅ | 16 route modules, **213 tests** pass |
 | MongoDB persistence | ✅ | Runs on the in-memory server **and** against a live Atlas cluster (seed/read/write/delete verified) |
-| Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build |
-| Deployment (Vercel) | 🟡 | Logged in, project linked, GitHub connected; the first builds failed on a self-inflicted `NODE_ENV`, fixed in code — a redeploy is still unverified |
+| Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build. On Vercel the platform serves the static build instead, which is the same origin but without helmet's CSP |
+| Deployment (Vercel) | ✅ | Live at **https://hcm-lite-eta.vercel.app** — `● Ready`, GitHub-connected, Atlas reachable from the function. `scripts/verify-prod.mjs` passes against it (SPA, deep link, login, cookie flags, 26 permissions, dashboard workforce 12) |
 | MongoDB models | ✅ | 16 Mongoose models covering every domain |
 | Authentication / sessions | ✅ | JWT in HttpOnly cookie, `tokenVersion` revocation, forced password change |
 | RBAC / permissions | ✅ | 26-permission catalogue, 3 roles, enforced per request, denial tests |
@@ -85,6 +88,14 @@ deployment at 12 Serverless Functions). The layout is fixed; a successful deploy
 | 12 | `vercel deploy --prod` after that fix (and the identical auto-build from the push) | ❌ build **succeeded** (397 packages, `Build Completed in /vercel/output`) but `Deploying outputs...` → `● Error`. The API answered `errorCode: exceeded_serverless_functions_per_deployment` — "No more than 12 Serverless Functions can be added to a Deployment on the Hobby plan" at step `patchBuild` |
 | 13 | `git mv api server`, root `api/` recreated with only `[...path].js` re-exporting `../server/dist/vercel-handler.js`; `workspaces: ["web", "server"]` | ✅ `npm install` + `npm run typecheck` exit 0; `npm run build` clean; **16 files, 213 tests passed** (84.61 s); `resolveWebRoot()` from `server/` still finds `web/dist`; importing the shim resolves the handler (it fails only on the missing `.env` at repo-root cwd, which the platform supplies) |
 | 14 | `vercel inspect --logs` vs `GET /v13/deployments/<id>` | ⚠️ the CLI shows a bare `● Error` with no reason; the deployment object's `errorMessage` is the only place the real cause appears. Worth remembering for every future Vercel failure |
+| 15 | First deploy after the rename | ✅ **`● Ready`** and aliased — the 12-function limit is gone. SPA only: `/` 200 HTML, `/attendance` 200 HTML, but every `/api/v1/*` answered Vercel's own `NOT_FOUND` text/plain |
+| 16 | `GET /api/v1/health` returned a Vercel **SSO login page** | ⚠️ project `ssoProtection.deploymentType` was `all_except_custom_domains`. Cleared with `PATCH /v9/projects/<id>` (`ssoProtection: null`, `passwordProtection: null`) — a deliberate decision that made the deployment public, recorded in limitation 11 |
+| 17 | Preview deployment with throwaway echo functions to isolate the 404 | ⚠️ `api/[...path].js` matched **one segment only**: `/api/zzz` → function, `/api/zzz/yyy` → platform 404; `api/echo/[...path].js` the same. So `outputDirectory` was never the cause and the catch-all filename could not serve a nested API |
+| 18 | Same preview, `"rewrites": [{ "source": "/ext/:path*", "destination": "/api/index" }]` | ✅ `/ext/a/b/c` → 200 from one function with `req.url` = `/ext/a/b/c?path=a%2Fb%2Fc` — any depth forwards, the original path survives, and Vercel appends the captured wildcard as a query parameter |
+| 19 | `api/[...path].js` → `api/index.js`, `rewrites` for `/api/:path*`, shim strips the injected `path` key | ❌ first production attempt: routing fixed (nested paths now reach the function) but **every** API path 500. `vercel logs` gave `ERR_REQUIRE_ESM: require() of ES Module /var/task/server/dist/vercel-handler.js from /var/task/api/index.js` — Vercel had compiled the ESM function to CommonJS |
+| 20 | `"type": "module"` added to the root `package.json` | ✅ `npm run typecheck` exit 0, `npm run build` clean, **16 files / 213 tests passed** (66.95 s), and the shim's import now stays ESM |
+| 21 | `node scripts/verify-prod.mjs https://hcm-lite-eta.vercel.app` against the live deployment | ✅ `/` 200 HTML · asset 200 · `/attendance` 200 HTML · unknown `/api/v1/nope` → **404 NOT_FOUND JSON from Express** (proof the app, not the platform, answered) · login 200 with `HttpOnly; Secure; SameSite=Lax` · `/auth/me` 26 permissions · dashboard 200 workforce **12** · `/api/v1/health` 200 `database.state: "connected"` (Atlas reachable from Vercel) |
+| 22 | Query strings through the rewrite, authenticated: `?page=1&limit=3`, `?limit=abc`, `?from=…&to=…` | ✅ 200 / **400 VALIDATION_ERROR** on `limit` / 200 — the injected `path` parameter never reaches the validators |
 
 ### Session 5 (2026-10-30) — persistent MongoDB Atlas cluster
 
@@ -210,7 +221,9 @@ trustworthy so login still works locally, but a real deployment must terminate T
 ### Deploying to Vercel
 
 The project is linked (`hcm-lite`, scope `ahmed-tech-01s-projects`) and the GitHub repository is
-connected, so a push to `main` builds production.
+connected, so a push to `main` builds production. Production currently aliases to
+**https://hcm-lite-eta.vercel.app** (also `hcm-lite-ahmed-tech-01s-projects.vercel.app` and the
+`hcm-lite-git-main-…` form).
 
 | Step | Command | Note |
 | --- | --- | --- |
@@ -241,17 +254,27 @@ Two deliberate omissions: `CORS_ORIGINS` (UI and API share one origin, so no cro
 ever made) and `ADMIN_EMAIL` / `ADMIN_PASSWORD` (the Atlas database is already seeded; adding demo
 credentials to a public deployment would only invite abuse).
 
-**Not yet verified:** a deployment that reaches `READY`. The last three builds all compiled
-successfully on the platform and then failed while deploying the output, for the two reasons above —
-both are now fixed in the repository, but nothing has been reachable on a Vercel URL yet, and the
-Atlas cluster has never been reached from Vercel's egress addresses (Network Access must allow them;
-Vercel functions have no fixed egress IP, so `0.0.0.0/0` is the practical answer). `vercel build
---prod` cannot validate any of this here — it fails inside this shell with `Error: spawn cmd.exe
-ENOENT` before running the build command, an environment problem and not evidence about the config.
+**Now verified:** the deployment reaches `READY` and serves both halves of the app from one origin at
+**https://hcm-lite-eta.vercel.app** — see session-6 rows 15–22. Atlas *is* reachable from Vercel's
+egress (the function reports `database.state: "connected"`), which confirms Network Access admits
+`0.0.0.0/0`; Vercel functions have no fixed egress IP, so there is no narrower option.
+
+**Still unverified on the deployed URL:** a real-browser walk-through. The production checks here were
+HTTP-level (HTML shell, asset, deep link, login, cookie flags, `/auth/me`, dashboard, list queries).
+One difference the probes did surface: on Vercel the SPA is served by the **platform**, not by Express,
+so `GET /` carries `public, max-age=0, must-revalidate` and **no CSP header** — helmet's default policy
+(verified locally, and blocking nothing) only applies when the API serves the build itself, as in
+`npm run start`. Assets are also `max-age=0` there instead of the `immutable` year the app sets.
+
+`vercel build --prod` still cannot be used to validate anything here — it fails inside this shell with
+`Error: spawn cmd.exe ENOENT` before running the build command, an environment problem and not evidence
+about the config. Preview deployments (no `outputDirectory`/`rewrites` in `vercel.json` needed) and
+throwaway echo functions are the working substitute.
 
 To read why a deployment fails when the CLI only prints `● Error`:
 `GET https://api.vercel.com/v13/deployments/<id>?teamId=<id>` with the CLI token returns
-`errorCode`, `errorMessage` and `errorStep`.
+`errorCode`, `errorMessage` and `errorStep` — and for a function that answers 500, `vercel logs <url>`
+(keeps streaming, so run it in the background and read the JSON lines) shows the real runtime error.
 
 ---
 
@@ -413,20 +436,30 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
    public `jwt.io` sample token (`sub: 1234567890`, issued 2018) and is of no use as a credential.
    None of these were committed (`server/.env` is git-ignored) and none were stored in memory; the
    `JWT_SECRET` in `server/.env` was generated locally and never printed.
-8. **The Atlas cluster is reachable from this one IP** (`153.117.38.141`). If Atlas Network Access is
-   restricted, deploying anywhere else requires adding that host's egress — and Vercel has no fixed
-   egress IP, so publishing there means setting access to `0.0.0.0/0`. That choice has been made
-   deliberately, with the understanding that the **leaked password must be rotated promptly**, because
-   while it is live the cluster is reachable from the whole internet.
-9. **The Vercel deploy itself is unverified.** `vercel.json`, `server/src/vercel-handler.ts` and the
-   production same-origin path are all proven *locally*, and three builds have compiled on the
-   platform, but none reached `READY` — first the injected `NODE_ENV`, then the Hobby limit of 12
-   Serverless Functions per deployment. Two specific unknowns remain: how the serverless runtime
-   reports a missing `web/dist` (the static build is served by the platform there, not by Express)
-   and whether Vercel forwards the full original URL to the function, which the Express app needs to
-   match its `/api/v1/...` mount. Expect to correct this config on the first real deploy.
+8. **~~The Atlas cluster is reachable from this one IP~~** — resolved by going public: the deployed
+   function reports `{"database":{"ready":true,"state":"connected"}}`, which only happens if Vercel's
+   egress is allowed, so Atlas Network Access now admits `0.0.0.0/0` (set by the owner in the Atlas
+   dashboard). Vercel has no fixed egress IP, so that is the only workable setting there. The
+   consequence is stated in item 7: **while the leaked password is unrotated the cluster is reachable
+   from the whole internet.**
+9. **~~The Vercel deploy itself is unverified.~~** Verified on 2026-10-30: production serves the SPA
+   and the API from one origin at `https://hcm-lite-eta.vercel.app`, and `scripts/verify-prod.mjs`
+   passes against it. Both unknowns listed here are answered: the platform serves `web/dist` while the
+   function serves JSON only (correct), and Vercel forwards the original URL to the function — but
+   **only through a `rewrites` entry**, not the `[...path]` filename this config first used, which
+   matched one segment and hid every nested route behind the platform's own 404. The other thing that
+   had to be corrected on the first real deploy was the module system: without `"type": "module"` in
+   the root `package.json` the function is transpiled to CommonJS and dies with `ERR_REQUIRE_ESM`.
+   See `ARCHITECTURE.md` §7 and D30–D34.
 10. **`frame-ancestors 'self'` blocks embedding.** Helmet's default CSP means the deployed app will
     not render inside an iframe (including an in-editor preview). Open it in a normal browser tab.
+11. **Vercel's Deployment Protection is switched off for this project.** It arrived enabled
+    (`ssoProtection.deploymentType: "all_except_custom_domains"`), which answered every
+    Vercel-provided URL with Vercel's own SSO login page — the app looked broken and no request ever
+    reached a function. Clearing it (`PATCH /v9/projects/<id>` with `ssoProtection: null` and
+    `passwordProtection: null`) made the deployment **publicly readable by anyone who has the URL**,
+    including the seeded demo accounts. Re-enable it, or move to a custom domain with protection on
+    Vercel subdomains, before treating this as anything but a demo.
 
 ---
 
@@ -436,10 +469,12 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 | --- | --- |
 | 🔴 Leaked Atlas password | Rotate in Atlas → Database Access, then update `MONGODB_URI` in `server/.env` |
 | 🔴 Unrecognised API key from the same paste | Revoke at whichever provider issued it; it is not used by this project |
-| Atlas Network Access scope | Confirm the allowlist is this IP only, not `0.0.0.0/0` |
+| 🔴 Atlas Network Access scope | Now `0.0.0.0/0`, and it has to stay that way for Vercel to reach the cluster — so the password rotation above is the only thing standing between the public internet and the database |
+| 🔴 Deployment Protection off | The URL is public with seeded demo logins. Re-enable SSO/password protection in Vercel → Project → Settings → Deployment Protection when the demo is over, or keep it off deliberately |
 | No commit yet | First commit landed in session 6 with the push to GitHub — `server/.env` stays out |
 | Docs not versioned | ✅ Resolved in session 6: `docs/` moved inside `hcm-lite/` |
-| Deploy unverified | Log in (`vercel login`), deploy, then re-run `node scripts/verify-prod.mjs https://<url>` and fix `vercel.json` if the rewrite misbehaves |
+| ~~Deploy unverified~~ | ✅ Deployed and verified: `https://hcm-lite-eta.vercel.app`, re-checked with `node scripts/verify-prod.mjs https://<url>`. `vercel.json` did need two corrections (rewrite instead of `[...path]`, root `"type": "module"`) |
+| Browser walk-through of the deployed URL | The live checks were HTTP-level; drive the deployed UI in a real browser once (CSP is absent there because the platform serves the static build) |
 | No frontend tests | Add Vitest + React Testing Library for the screens that carry logic |
 | No E2E | Add Playwright for the five-minute demo path |
 | Assistant provider | Add a smoke test against a real endpoint if a key is ever supplied |
@@ -450,6 +485,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
+| 2026-10-30 | Session 6 (cont. 3): **the app is live at https://hcm-lite-eta.vercel.app.** The renamed layout reached `● Ready`, but every `/api/v1/*` answered Vercel's own 404: measured with echo functions in a preview, `api/[...path].js` matches a **single** segment. Replaced it with `api/index.js` plus `"rewrites": [{ "source": "/api/:path*", "destination": "/api/index" }]` (the shim drops the `?path=…` parameter Vercel injects), then fixed the cold-start `ERR_REQUIRE_ESM` that followed by declaring `"type": "module"` in the root `package.json`. Turned off Vercel's Deployment Protection, which had been answering the whole URL with an SSO login page. Verified: typecheck 0, build clean, **213 tests**, and `verify-prod.mjs` green against production — SPA, deep link, JSON 404 from Express, login with `HttpOnly; Secure; SameSite=Lax`, 26 permissions, dashboard workforce 12, `/api/v1/health` reporting Atlas connected. Docs updated (§1, §7, limitations 8–11, D33–D34). | Qoder |
 | 2026-10-30 | Session 6 (cont. 2): the two fixed deploys then failed at `patchBuild` with `exceeded_serverless_functions_per_deployment` — Vercel compiles **every** file under `api/` into a Serverless Function and the Hobby plan allows 12. Renamed the backend workspace folder `api/` → `server/` (`git mv`, 100% rename similarity), leaving `api/[...path].js` as the only file there and re-exporting `../server/dist/vercel-handler.js`; dropped the ignored `memory` key from `vercel.json`. Root `workspaces` is now `web` + `server`; the npm package is still named `api`, so every script and test command is unchanged. Verified: typecheck 0, build clean, **213 tests**, `resolveWebRoot()` → `web/dist`, shim resolves the handler. Docs updated (`server/.env` everywhere, new §7 bullets, D32). | Qoder |
 | 2026-10-30 | Session 6 (cont.): logged in to Vercel, linked `hcm-lite` and connected the GitHub repository. The first two production builds errored in 7 s — my own `NODE_ENV=production` variable was injected into the build, so `npm ci` installed 129 of 396 packages and `npm run build` exited 127. Fixed by removing that variable, setting `installCommand: "npm ci --include=dev"`, and adding `inferNodeEnv()` in `config/env.ts` to derive production from Vercel's `VERCEL_ENV`; guarded by 3 new tests (**213** now pass) and reproduced under a deployed function's shape (`env: "production"`, cookie `Secure`). Also re-asserted `!.env.example` after the `.env*` rule that the Vercel CLI appended to `.gitignore`. | Qoder |
 | 2026-10-30 | Session 6: moved `docs/` inside `hcm-lite/` so the documents are versioned and repaired the `.gitignore` encoding damage; added production same-origin serving (`middleware/static-web.ts`: `express.static(web/dist)` after the API routers, SPA fallback before the 404 handler, plus 7 tests); added the serverless entry point `api/src/vercel-handler.ts` and `vercel.json`; documented the deployment environment. Re-ran typecheck, **210 tests**, the production build and a live `NODE_ENV=production` serve (shell `no-cache`, hashed assets `immutable`, deep link served, unknown `/api/v1/*` still JSON 404, login cookie `HttpOnly; Secure; SameSite=Lax`). Made the first commit and pushed to GitHub with `api/.env` excluded. | Qoder |

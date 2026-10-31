@@ -29,7 +29,7 @@ Production  one origin
               ├─ `npm run demo`: throwaway mongodb-memory-server instance, seeded on boot
               └─ serverless:  server/src/vercel-handler.ts exports the same app (see §7)
 
-  hcm-lite/api/  holds exactly one file — `api/[...path].js`, the Vercel Function entry.
+  hcm-lite/api/  holds exactly one file — `api/index.js`, the Vercel Function entry.
   Vercel turns every file inside `api/` into a Serverless Function, so the backend must not live
   there (see §7 and D32).
 ```
@@ -322,11 +322,11 @@ process is started:
 | --- | --- | --- |
 | `server/src/server.ts` | `npm run dev`, `npm run start` | Connects, bootstraps an admin from env if the DB is empty, `listen`, SIGINT/SIGTERM shutdown |
 | `server/src/scripts/dev.ts` | `npm run demo` | In-memory MongoDB, `reset: true` seed, then imports `server.ts` |
-| `server/src/vercel-handler.ts` | `api/[...path].js` (the one Vercel Function) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
+| `server/src/vercel-handler.ts` | `api/index.js` (the one Vercel Function) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
 
 ### vercel.json
 
-The deployment is a **monorepo with a static SPA and one catch-all API function**:
+The deployment is a **monorepo with a static SPA and one API function reached through a rewrite**:
 
 ```jsonc
 {
@@ -334,8 +334,11 @@ The deployment is a **monorepo with a static SPA and one catch-all API function*
   "outputDirectory": "web/dist",       // Vercel serves the SPA, incl. hashed assets
   "installCommand": "npm ci --include=dev",   // devDependencies are needed by the build
   "framework": null,                   // nothing to auto-detect
-  "functions": { "api/[...path].js": { "maxDuration": 30 } },
-  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
+  "functions": { "api/index.js": { "maxDuration": 30 } },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index" },      // every API depth -> the function
+    { "source": "/((?!api/).*)", "destination": "/index.html" }     // SPA history router
+  ]
 }
 ```
 
@@ -346,11 +349,18 @@ Why each piece is there:
 - **`--include=dev` in `installCommand`.** The build needs `tsc` and `vite`, which are
   devDependencies. This is belt-and-braces insurance against any environment that still arrives with
   `NODE_ENV=production` set.
-- **`api/[...path].js` is the only file in `api/`.** Vercel derives the URL from the path under `api/`:
-  the catch-all name maps `/api/*` to one function and forwards the original URL, which the Express app
-  needs because its routers are mounted under `/api/v1`. The file re-exports
-  `../server/dist/vercel-handler.js`, so the deployed code is exactly what `npm run build` produced. An
-  `api/index.js` would have matched `/api` alone, not `/api/v1/health`.
+- **`api/index.js` is the only file in `api/`, and a rewrite — not a catch-all filename — routes to it.**
+  The obvious shape was `api/[...path].js`, and it was used for four deployments. On this project
+  Vercel matched **one segment only**: `/api/zzz` reached the function while `/api/v1/health` — two
+  segments — fell through to the platform's own `NOT_FOUND`, so no nested route could ever be served.
+  Verified with throwaway echo functions in a preview deployment (`api/echo/[...path].js`: `/api/echo/a`
+  200, `/api/echo/a/b` 404; a `rewrites` entry `/ext/:path*` → `/api/index` reached the same function at
+  `/ext/a/b/c` 200). `"source": "/api/:path*"` therefore forwards every depth, and `req.url` inside the
+  function keeps the **original** path, which the Express app needs because its routers are mounted
+  under `/api/v1`. Vercel also appends the wildcard it matched as a query parameter
+  (`?path=v1%2Fhealth`), which the shim strips before handing the request to Express so the client's
+  own query string is what the validators see. The shim re-exports
+  `../server/dist/vercel-handler.js`, so the deployed code is exactly what `npm run build` produced.
 - **Inside the function, static serving switches itself off.** `resolveWebRoot()` searches for
   `web/dist` and finds nothing in the bundle (a runtime `fs` read is invisible to the tracer), so it
   logs "No frontend build found" and serves JSON only — which is correct here, because Vercel serves
@@ -367,7 +377,13 @@ Why each piece is there:
   (`errorCode: exceeded_serverless_functions_per_deployment`, step `patchBuild`) is what failed three
   otherwise successful builds: the platform log said `Build Completed in /vercel/output`, then
   `Deploying outputs...` and a bare `● Error`, with the real message only visible through
-  `GET /v13/deployments/<id>`. `api/` now holds the single catch-all shim.
+  `GET /v13/deployments/<id>`. `api/` now holds the single shim.
+- **The root `package.json` needs `"type": "module"`.** Without it Vercel compiles the function from
+  ESM to CommonJS (the build log warns about exactly this) and the shim's `import` of the ESM
+  `server/dist/vercel-handler.js` becomes a `require()` that dies at cold start with `ERR_REQUIRE_ESM`
+  — every API path answered 500 while the SPA kept working. Only `api/index.js` and the `.mjs`
+  scripts sit under the root package, and `web/` and `server/` each declare their own `type`, so the
+  flag changes nothing else: typecheck, build and the 213 tests pass with it set.
 
 **`NODE_ENV` must never be a Vercel environment variable.** Production variables are also injected
 into the build, and npm then omits devDependencies — exactly the `tsc` and `vite` binaries the build
@@ -473,6 +489,8 @@ draft, inert.
 | D30 | `vercel.json` uses `buildCommand` + `functions` + `rewrites`, not the legacy `builds` / `routes` pair | Micro mode skips the project's build command, so a `builds` entry pointing at the git-ignored `api/dist` could never resolve on a git deploy; the modern keys also let Vercel trace the compiled handler after `npm run build` |
 | D31 | `NODE_ENV` is never a Vercel variable; production is inferred from `VERCEL_ENV` | Production variables are injected into the build too, and `NODE_ENV=production` makes `npm ci` drop devDependencies, so `tsc`/`vite` vanish and the build exits 127 — this is precisely how the first two production deploys failed. Vercel guarantees `VERCEL_ENV` at function runtime, so `inferNodeEnv()` rides on that instead and still gets the `pino-pretty`-free logger and the `Secure` cookie |
 | D32 | The Express workspace lives in `server/` and `api/` holds only the function shim | Vercel treats every file under `api/` as a Serverless Function and the Hobby plan allows at most 12 per deployment. The directory name is the platform's routing contract, so the code moved rather than the plan. The npm workspace is still *named* `api`, so every `-w api` script kept working |
+| D33 | `/api/*` reaches the function through a `rewrites` entry, not a `[...path]` filename | The catch-all file matched one segment only on this project, so `/api/v1/health` never reached Express and Vercel's own 404 answered instead. A rewrite was measured to forward any depth while keeping the original `req.url`; the shim strips the `?path=…` parameter Vercel injects so query validation sees exactly what the client sent |
+| D34 | Root `package.json` declares `"type": "module"` | Without it Vercel transpiles the function to CommonJS and the shim's import of the ESM `server/dist` handler fails at cold start with `ERR_REQUIRE_ESM`. It is inert for everything else in the repo: both workspaces declare their own `type` and the root scripts are `.mjs` |
 
 ---
 
@@ -493,13 +511,16 @@ draft, inert.
 6. **The `openai` assistant provider is untested against a real endpoint.**
 7. **Routes and services share a file** in the smaller modules (analytics, audit, notifications); the
    larger ones (payroll, leave, attendance) are already split.
-8. 🔴 **The Atlas password was disclosed in plain text** and is live in `server/.env`. It must be
-   rotated before this configuration is used for anything real. `server/.env` is git-ignored, so the
-   exposure is the conversation and the file on disk, not the repository.
-9. **The serverless path is unproven on the platform.** `vercel-handler.ts` compiles and the local
-   production build is proven, but no function has ever run on Vercel: cold-start latency against a
-   WAN-round-trip Atlas cluster, the `routes` prefix behaviour, and the request-size limits on payslip
-   PDFs are all still assumptions.
+8. 🔴 **The Atlas password was disclosed in plain text** and is live in `server/.env`, while Atlas
+   Network Access now admits `0.0.0.0/0` because Vercel has no fixed egress IP, and the deployed app is
+   public. It must be rotated before this configuration is used for anything real. `server/.env` is
+   git-ignored, so the exposure is the conversation and the file on disk, not the repository.
+9. **The serverless path is proven, its tail behaviours are not.** A function has run on Vercel and
+   served authenticated traffic from Atlas, but cold-start latency against a WAN-round-trip cluster and
+   the request/response size limits on payslip PDFs are still unmeasured assumptions.
 10. **Every cold start pays for a remote database.** In-memory development hides this; a deployed
     function opens a new connection pool per container, which is worth revisiting (or moving to a
     connection proxy) if the demo is ever exposed to real traffic.
+11. **On Vercel the SPA never passes through Express.** The platform serves `web/dist`, so the shell and
+    assets carry Vercel's cache headers and **no CSP** — helmet's policy (and the `immutable` asset
+    caching) only applies when the API serves the build, as it does in `npm run start` and `npm run demo`.

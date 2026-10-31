@@ -1,6 +1,7 @@
 {
   "name": "hcm-lite",
   "private": true,
+  "type": "module",
   "version": "0.1.0",
   "description": "HCM Lite — MERN Human Capital Management system",
   "workspaces": [
