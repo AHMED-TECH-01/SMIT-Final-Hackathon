@@ -96,6 +96,7 @@ the deployment is now public with seeded demo logins such as `admin@hcm.test`.
 | 20 | `"type": "module"` added to the root `package.json` | ✅ `npm run typecheck` exit 0, `npm run build` clean, **16 files / 213 tests passed** (66.95 s), and the shim's import now stays ESM |
 | 21 | `node scripts/verify-prod.mjs https://hcm-lite-eta.vercel.app` against the live deployment | ✅ `/` 200 HTML · asset 200 · `/attendance` 200 HTML · unknown `/api/v1/nope` → **404 NOT_FOUND JSON from Express** (proof the app, not the platform, answered) · login 200 with `HttpOnly; Secure; SameSite=Lax` · `/auth/me` 26 permissions · dashboard 200 workforce **12** · `/api/v1/health` 200 `database.state: "connected"` (Atlas reachable from Vercel) |
 | 22 | Query strings through the rewrite, authenticated: `?page=1&limit=3`, `?limit=abc`, `?from=…&to=…` | ✅ 200 / **400 VALIDATION_ERROR** on `limit` / 200 — the injected `path` parameter never reaches the validators |
+| 23 | `git push origin main` → Vercel's GitHub auto-build | ✅ **`● Ready` in 29 s** and aliased — `vercel alias ls` shows all three production aliases on the git-built deployment, and `verify-prod.mjs` is green against it again. `git push` alone is now the release path; no manual `vercel deploy` needed |
 
 ### Session 5 (2026-10-30) — persistent MongoDB Atlas cluster
 
