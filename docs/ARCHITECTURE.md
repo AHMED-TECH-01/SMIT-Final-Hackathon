@@ -1,11 +1,12 @@
 # HCM Lite — Architecture
 
-**Status:** 🟢 **All 12 phases are built and tested** — 16 test suites / 213 tests, plus a full browser
-walk-through against a live API and a verified production same-origin build.
+**Status:** 🟢 **All 12 phases are built and tested** — 17 test suites / 217 tests, plus a full browser
+walk-through against a live API, a verified production same-origin build and a live audit of the
+deployed backend.
 This document describes *what exists*. Where a rule was planned but not implemented it says so
 explicitly. Read alongside `docs/PROGRESS.md`.
 
-**Last updated:** 2026-10-30 (session 6)
+**Last updated:** 2026-10-31 (session 7)
 
 ---
 
@@ -185,6 +186,7 @@ permission it requires.
 | Code | Status | Source |
 | --- | --- | --- |
 | `VALIDATION_ERROR` | 400 | Zod (body/query/params), `details: [{ field, message }]` |
+| `BAD_REQUEST` | 400 | the body is not valid JSON (`express.json` parse failure) |
 | `UNAUTHENTICATED` | 401 | missing/invalid cookie, revoked session, bad credentials |
 | `ACCOUNT_INACTIVE` | 403 | deactivated user |
 | `PASSWORD_CHANGE_REQUIRED` | 403 | `mustChangePassword` still true |
@@ -193,6 +195,8 @@ permission it requires.
 | `CONFLICT` | 409 | setup already complete; duplicate unique value; row still referenced |
 | `UNPROCESSABLE` | 422 | weak/reused password, business rule violation (e.g. insufficient balance) |
 | `RATE_LIMITED` | 429 | login throttling (sends `Retry-After`) |
+| `PAYLOAD_TOO_LARGE` | 413 | body above the 100 kb JSON limit — mapped from `entity.too.large` |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | body in a charset the parser will not decode (`charset.unsupported` / `encoding.unsupported`) |
 | `INTERNAL_ERROR` | 500 | unexpected — logged server-side, never a stack trace in the body |
 
 ---
@@ -383,7 +387,7 @@ Why each piece is there:
   `server/dist/vercel-handler.js` becomes a `require()` that dies at cold start with `ERR_REQUIRE_ESM`
   — every API path answered 500 while the SPA kept working. Only `api/index.js` and the `.mjs`
   scripts sit under the root package, and `web/` and `server/` each declare their own `type`, so the
-  flag changes nothing else: typecheck, build and the 213 tests pass with it set.
+  flag changes nothing else: typecheck, build and the full test suite pass with it set.
 
 **`NODE_ENV` must never be a Vercel environment variable.** Production variables are also injected
 into the build, and npm then omits devDependencies — exactly the `tsc` and `vite` binaries the build
@@ -423,7 +427,7 @@ blocked, because the bundle is same-origin, there are no inline scripts, and Goo
 | Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `server/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
 | Static serving | `createApp(webRoot)` takes the root as a parameter, so the middleware is testable even though the default under `NODE_ENV=test` is deliberately off |
 | Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–110 s |
-| Scope | 16 files / 213 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web |
+| Scope | 17 files / 217 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — `createApp(null)` needs no database because nothing reaches a handler |
 | Frontend | `tsc --noEmit` and `vite build` only. No unit or E2E runner is installed |
 
 ---

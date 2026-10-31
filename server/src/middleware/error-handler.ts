@@ -20,6 +20,39 @@ function isDuplicateKeyError(err: unknown): err is { code: number; keyValue?: Re
 }
 
 /**
+ * `express.json` rejects a body it cannot accept before any route runs, and it
+ * reports that through `err.type` rather than an `HttpError`. Left unhandled it
+ * fell through to the generic 500, which told the caller nothing about a request
+ * that was simply too big or not JSON at all — the visible case being a large
+ * CSV handed to `/employees/import`, which posts the text inside a JSON body.
+ * Both spellings of the encoding rejection are listed because body-parser
+ * renames raw-body's `encoding.unsupported` to `charset.unsupported` when it
+ * re-wraps it as a 400.
+ */
+function bodyParserRejection(err: unknown): { status: number; code: string; message: string } | null {
+  if (typeof err !== 'object' || err === null || !('type' in err)) return null
+  switch ((err as { type: unknown }).type) {
+    case 'entity.too.large':
+      return {
+        status: 413,
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'That request is too large. Send a smaller body.',
+      }
+    case 'entity.parse.failed':
+      return { status: 400, code: 'BAD_REQUEST', message: 'The request body is not valid JSON.' }
+    case 'encoding.unsupported':
+    case 'charset.unsupported':
+      return {
+        status: 415,
+        code: 'UNSUPPORTED_MEDIA_TYPE',
+        message: 'That request encoding is not supported. Send UTF-8 JSON.',
+      }
+    default:
+      return null
+  }
+}
+
+/**
  * Central error handler.
  *
  * Guarantees: predictable shape, correct status code, and never a stack trace,
@@ -61,6 +94,17 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
         message: field ? `That ${field} is already in use.` : 'That record already exists.',
         ...(field ? { details: [{ field, message: 'This value must be unique.' }] } : {}),
       },
+    })
+    return
+  }
+
+  const rejection = bodyParserRejection(err)
+  if (rejection) {
+    // The caller sent something the body parser will not accept; this is a
+    // client error, so it is answered without logging it as a server fault.
+    res.status(rejection.status).json({
+      success: false,
+      error: { code: rejection.code, message: rejection.message },
     })
     return
   }
