@@ -196,7 +196,7 @@ permission it requires.
 | `UNPROCESSABLE` | 422 | weak/reused password, business rule violation (e.g. insufficient balance) |
 | `RATE_LIMITED` | 429 | login throttling (sends `Retry-After`) |
 | `PAYLOAD_TOO_LARGE` | 413 | body above the 100 kb JSON limit — mapped from `entity.too.large` |
-| `UNSUPPORTED_MEDIA_TYPE` | 415 | body in a charset the parser will not decode (`charset.unsupported` / `encoding.unsupported`). On Vercel this case is refused earlier by the platform as invalid JSON and answers **400** instead — still a client error with our envelope |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | body in a charset the parser will not decode (`charset.unsupported` / `encoding.unsupported`). On Vercel a body whose bytes the platform cannot decode itself is intercepted earlier and answers **400** instead; a decodable body under a wrong charset label still reaches the parser and answers 415 |
 | `INTERNAL_ERROR` | 500 | unexpected — logged server-side, never a stack trace in the body |
 
 ---
@@ -329,11 +329,12 @@ process is started:
 | `server/src/vercel-handler.ts` | `api/index.js` (the one Vercel Function) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
 
 The serverless shape is not a plain Node socket. Vercel's runtime decodes the request body itself and
-exposes it through a getter on `req.body`, so a body that is not valid JSON fails **inside**
-`express.json` with an error that declares `statusCode: 400` and carries no body-parser `type`. That is
-why `middleware/error-handler.ts` answers a rejection by the status the error declares as well as by
-body-parser's type names, and why a charset the local server refuses with 415 is refused as invalid
-JSON on the platform. Only 4xx is honoured; a 5xx stays a server fault.
+exposes it through a getter on `req.body`, so a body it cannot decode — malformed JSON, or bytes under
+a charset label it does not speak — fails **inside** `express.json` with an error that declares
+`statusCode: 400` and carries no body-parser `type`. That is why `middleware/error-handler.ts` answers a
+rejection by the status the error declares as well as by body-parser's type names. Only 4xx is honoured;
+a 5xx stays a server fault. The consequence, measured on two builds: a mislabelled charset answers 400
+when the platform cannot decode the bytes and 415 when it can and the parser objects to the label.
 
 ### vercel.json
 
