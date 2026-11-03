@@ -322,3 +322,12 @@ export const IconAlertTriangle = (p: P) => (
     <path d="M12 9v4M12 17h.01" />
   </Svg>
 )
+
+export const IconEyeOff = (p: P) => (
+  <Svg {...p}>
+    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+    <path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-1.85 3.06" />
+    <path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61" />
+    <path d="m2 2 20 20" />
+  </Svg>
+)

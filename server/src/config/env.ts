@@ -100,6 +100,23 @@ export const env: Env = loadEnv()
 export const isProd = env.NODE_ENV === 'production'
 export const isTest = env.NODE_ENV === 'test'
 
+/**
+ * True on any host that marks itself as a deployment. Vercel sets `VERCEL` for
+ * production *and* preview builds (and for `vercel dev`), while `inferNodeEnv()`
+ * deliberately leaves `NODE_ENV` at its development default on a preview — so
+ * `isProd` alone cannot tell a deployed URL from a laptop, and nothing secret
+ * may be handed out on that difference.
+ */
+export const isDeployed = Boolean(process.env.VERCEL)
+
+/**
+ * The only condition under which a plaintext password-reset token may be
+ * returned to a caller: a local run that no one else can reach. HCM Lite has
+ * no email provider, so a local developer would otherwise have no way to
+ * complete a reset — but a preview deployment must never leak the token.
+ */
+export const exposesResetToken = !isProd && !isDeployed
+
 export const corsOrigins = env.CORS_ORIGINS.split(',')
   .map((o) => o.trim())
   .filter(Boolean)

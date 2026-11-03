@@ -4,9 +4,15 @@ import { asyncHandler } from '../../lib/async-handler.js'
 import { ok } from '../../lib/response.js'
 import { validate } from '../../middleware/validate.js'
 import { requireAuth } from '../../middleware/auth.js'
-import { clearLoginAttempts, loginRateLimit } from '../../middleware/login-rate-limit.js'
-import { changePassword, login } from './auth.service.js'
-import { clearSessionCookie, setSessionCookie } from './session.js'
+import { clearLoginAttempts, forgotPasswordRateLimit, loginRateLimit } from '../../middleware/login-rate-limit.js'
+import { recordAudit } from '../../lib/audit.js'
+import {
+  changePassword,
+  forgotPassword,
+  login,
+  resetPassword,
+} from './auth.service.js'
+import { REMEMBER_ME, clearSessionCookie, setSessionCookie } from './session.js'
 import { toPublicUser, UserModel } from './user.model.js'
 import { permissionsFor, type Role } from './permissions.js'
 
@@ -15,10 +21,20 @@ const router = Router()
 const loginSchema = z.object({
   email: z.string().trim().email('Enter a valid email address.'),
   password: z.string().min(1, 'Password is required.'),
+  remember: z.boolean().optional(),
 })
 
 const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Current password is required.'),
+  newPassword: z.string().min(1, 'New password is required.'),
+})
+
+const forgotSchema = z.object({
+  email: z.string().trim().email('Enter a valid email address.'),
+})
+
+const resetSchema = z.object({
+  token: z.string().min(16, 'The reset token is missing or malformed.'),
   newPassword: z.string().min(1, 'New password is required.'),
 })
 
@@ -27,10 +43,60 @@ router.post(
   loginRateLimit,
   validate({ body: loginSchema }),
   asyncHandler(async (req, res) => {
-    const { user, token } = await login(req.body)
+    const { user, token, remember } = await login(req.body)
     clearLoginAttempts({ ip: req.ip, body: req.body })
-    setSessionCookie(res, token)
+    setSessionCookie(res, token, remember ? REMEMBER_ME.maxAgeMs : undefined)
     ok(res, { user: toPublicUser(user) })
+  }),
+)
+
+/**
+ * Starts a self-service password reset. The response is identical whether or
+ * not the email exists; only a local run also carries the reset token, because
+ * no email provider is wired up and the flow would otherwise be a dead end.
+ * Any deployment — preview included — gets the generic notice (see
+ * `exposesResetToken` in config/env.ts).
+ */
+router.post(
+  '/forgot-password',
+  forgotPasswordRateLimit,
+  validate({ body: forgotSchema }),
+  asyncHandler(async (req, res) => {
+    const { devResetToken } = await forgotPassword(req.body.email)
+    await recordAudit(req, {
+      action: 'auth.forgot_password',
+      entity: 'user',
+      meta: { email: req.body.email.toLowerCase() },
+    })
+    ok(
+      res,
+      devResetToken
+        ? {
+            message: 'If that account exists, a reset has been started.',
+            devResetToken,
+          }
+        : { message: 'If that account exists, a reset has been started.' },
+    )
+  }),
+)
+
+/**
+ * Completes a reset with a one-time token. No session is involved, and any
+ * cookie the browser still holds is cleared — the reset bumped tokenVersion,
+ * so that session is already dead server-side.
+ */
+router.post(
+  '/reset-password',
+  validate({ body: resetSchema }),
+  asyncHandler(async (req, res) => {
+    await resetPassword(req.body)
+    clearSessionCookie(res)
+    await recordAudit(req, {
+      action: 'auth.reset_password',
+      entity: 'user',
+      meta: { via: 'self-service token' },
+    })
+    ok(res, { message: 'Password updated. Sign in with your new password.' })
   }),
 )
 
@@ -72,6 +138,8 @@ router.post(
   validate({ body: changePasswordSchema }),
   asyncHandler(async (req, res) => {
     const { token, user } = await changePassword(req.user!.id, req.body)
+    // A password change revokes every other session; this one continues with
+    // a fresh 15-minute cookie.
     setSessionCookie(res, token)
     ok(res, { user: toPublicUser(user), message: 'Password updated.' })
   }),

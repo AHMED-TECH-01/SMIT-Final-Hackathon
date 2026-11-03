@@ -14,6 +14,11 @@ const WINDOW_MS = 15 * 60 * 1000
 
 const limiter = new FixedWindowLimiter(MAX_ATTEMPTS, WINDOW_MS)
 
+// Password-reset requests are rarer than logins; a tighter window per
+// ip:email pair stops the endpoint being used to spam reset tokens.
+const FORGOT_MAX_ATTEMPTS = 5
+const forgotLimiter = new FixedWindowLimiter(FORGOT_MAX_ATTEMPTS, WINDOW_MS)
+
 export const loginRateLimit: RequestHandler = (req, res, next) => {
   const rawEmail = typeof req.body?.email === 'string' ? req.body.email.toLowerCase() : 'anonymous'
   const key = `${req.ip ?? 'unknown'}:${rawEmail}`
@@ -36,7 +41,24 @@ export function clearLoginAttempts(req: { ip?: string; body?: { email?: unknown 
   limiter.reset(`${req.ip ?? 'unknown'}:${rawEmail}`)
 }
 
+/** Throttles POST /auth/forgot-password with the same ip:email keying. */
+export const forgotPasswordRateLimit: RequestHandler = (req, res, next) => {
+  const rawEmail = typeof req.body?.email === 'string' ? req.body.email.toLowerCase() : 'anonymous'
+  const key = `${req.ip ?? 'unknown'}:${rawEmail}`
+
+  const result = forgotLimiter.hit(key)
+  res.setHeader('X-RateLimit-Remaining', String(result.remaining))
+
+  if (result.limited) {
+    res.setHeader('Retry-After', String(result.retryAfter))
+    return next(tooManyRequests('Too many reset requests. Please try again later.'))
+  }
+
+  next()
+}
+
 /** Test helper. */
 export function resetLoginRateLimit(): void {
   limiter.resetAll()
+  forgotLimiter.resetAll()
 }

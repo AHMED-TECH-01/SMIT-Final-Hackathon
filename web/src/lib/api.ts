@@ -81,7 +81,13 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   return `${BASE}${path}${search ? `?${search}` : ''}`
 }
 
-const AUTH_PATHS = ['/auth/login', '/auth/me', '/auth/logout']
+const AUTH_PATHS = [
+  '/auth/login',
+  '/auth/me',
+  '/auth/logout',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+]
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<ApiEnvelope<T>> {
   let response: Response

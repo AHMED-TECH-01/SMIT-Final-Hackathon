@@ -26,7 +26,7 @@ interface SessionValue {
   session: SessionState | null
   loading: boolean
   setupRequired: boolean
-  signIn: (email: string, password: string) => Promise<void>
+  signIn: (email: string, password: string, remember?: boolean) => Promise<void>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
   markSetupComplete: (user: User) => void
@@ -71,8 +71,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => setUnauthorizedHandler(null)
   }, [])
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const result = await api.post<{ user: User }>('/auth/login', { email, password })
+  const signIn = useCallback(async (email: string, password: string, remember = false) => {
+    // `remember` only asks the server for a longer-lived HttpOnly cookie;
+    // nothing about the session is ever stored in localStorage.
+    const result = await api.post<{ user: User }>('/auth/login', { email, password, remember })
     const me = await api.get<{ user: User; permissions: string[] }>('/auth/me')
     setSession({ user: me.data.user ?? result.data.user, permissions: me.data.permissions })
     setSetupRequired(false)

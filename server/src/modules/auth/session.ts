@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs'
+import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import type { Response } from 'express'
 import { env, isProd, isTest } from '../../config/env.js'
@@ -51,6 +52,9 @@ export function signSessionToken(
   return jwt.sign(claims, env.JWT_SECRET, { expiresIn } as jwt.SignOptions)
 }
 
+/** How long a "remember me" session stays signed in. Matches the cookie maxAge. */
+export const REMEMBER_ME = { expiresIn: '7d', maxAgeMs: 7 * 24 * 60 * 60 * 1000 }
+
 /** Throws 401 on any problem — callers never see library-specific errors. */
 export function verifySessionToken(token: string): SessionClaims {
   let payload: unknown
@@ -78,7 +82,11 @@ export function verifySessionToken(token: string): SessionClaims {
   return { sub, role, cv }
 }
 
-export function setSessionCookie(res: Response, token: string, maxAgeMs = 15 * 60 * 1000): void {
+export function setSessionCookie(
+  res: Response,
+  token: string,
+  maxAgeMs = 15 * 60 * 1000,
+): void {
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: isProd,
@@ -102,4 +110,29 @@ export function readSessionCookie(
 ): string | undefined {
   const value = cookies?.[SESSION_COOKIE]
   return typeof value === 'string' ? value : undefined
+}
+
+/* ------------------------------------------------------------------ */
+/* Password-reset tokens                                               */
+/* ------------------------------------------------------------------ */
+
+/** Lifetime of a self-service password-reset link. */
+export const RESET_TOKEN_TTL_MS = 30 * 60 * 1000
+
+/**
+ * Generates a one-time reset token. The plaintext is returned to the caller
+ * exactly once (delivered out-of-band); only its SHA-256 is ever persisted,
+ * so a database leak does not hand out usable resets.
+ */
+export function createResetToken(): { token: string; tokenHash: string; expiresAt: Date } {
+  const token = crypto.randomBytes(32).toString('base64url')
+  return {
+    token,
+    tokenHash: hashResetToken(token),
+    expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
+  }
+}
+
+export function hashResetToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex')
 }

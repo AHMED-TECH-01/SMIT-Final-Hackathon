@@ -1,12 +1,13 @@
 # HCM Lite — Architecture
 
-**Status:** 🟢 **All 12 phases are built and tested** — 17 test suites / 221 tests, plus a full browser
+**Status:** 🟢 **All 12 phases are built and tested** — 18 test suites / 241 tests, plus a full browser
 walk-through against a live API, a verified production same-origin build and a live audit of the
 deployed backend.
 This document describes *what exists*. Where a rule was planned but not implemented it says so
 explicitly. Read alongside `docs/PROGRESS.md`.
 
-**Last updated:** 2026-11-03 (session 7 cont. 2)
+**Last updated:** 2026-11-03 (session 8 — self-service password recovery, remember-me, real /login URL;
+reset token handed out on local runs only)
 
 ---
 
@@ -97,9 +98,11 @@ permission it requires.
 | health | `GET /health/ready` | public | Readiness probe |
 | setup | `GET /setup/status` | public | `{ setupRequired }` |
 | setup | `POST /setup` | public, one-time | Creates company + first admin, sets the cookie; `409` if already set up |
-| auth | `POST /auth/login` | public | Throttled 10 / 15 min per `ip:email`; sets cookie |
+| auth | `POST /auth/login` | public | Throttled 10 / 15 min per `ip:email`; sets cookie; `remember: true` extends it to 7 days |
 | auth | `POST /auth/logout` | public | Clears the cookie, idempotent |
 | auth | `GET /auth/me` | session | Identity + effective permission list |
+| auth | `POST /auth/forgot-password` | public | Throttled 5 / 15 min per `ip:email`; generic response either way; one-time token hashed at rest; admins get an in-app notice; because there is no mail provider **only a local run** (`exposesResetToken`) also puts the token in the response — every deployment, preview included, never does (D36) |
+| auth | `POST /auth/reset-password` | public | Verifies the token server-side, enforces strength, bumps `tokenVersion` (kills every session), clears the cookie |
 | auth | `POST /auth/change-password` | session | Verifies current password and strength, bumps `tokenVersion`, re-issues the cookie |
 | users | `GET /users` | `user.read` | Account list with `meta.total` |
 | users | `POST /users` | `user.create` | Creates an account with a temporary password (`mustChangePassword`) |
@@ -174,10 +177,13 @@ permission it requires.
 
 ### Session mechanics
 
-- Cookie `hcm_session`: `HttpOnly`, `SameSite=Lax`, `Secure` only in production, 15-minute expiry.
+- Cookie `hcm_session`: `HttpOnly`, `SameSite=Lax`, `Secure` only in production, 15-minute expiry —
+  or 7 days when the sign-in ticked “remember me” (same cookie, longer `Max-Age` and JWT `exp`; never
+  localStorage).
 - Payload: `{ sub, role, cv }` where `cv` is the user row's `tokenVersion`.
-- Revocation: a password change or an admin reset increments `tokenVersion`, so every other session
-  fails the `cv` comparison on its next request while the acting session receives a fresh cookie.
+- Revocation: a password change, a self-service reset or an admin reset increments `tokenVersion`, so
+  every other session fails the `cv` comparison on its next request while the acting session receives
+  a fresh cookie (change-password only).
 - Login verifies the **password before the account status**, so a deactivated account is
   indistinguishable from a wrong password until the credentials are proven correct.
 
@@ -209,7 +215,7 @@ the calendar day**, never as a local timestamp.
 | Collection | Purpose | Notable constraints |
 | --- | --- | --- |
 | `companies` | The single tenant | `key` unique + immutable, always `'primary'` — this is what makes one-time setup safe under concurrency |
-| `users` | Logins | `email` unique and lower-cased; `passwordHash` is `select: false` and never serialised; `tokenVersion` drives revocation |
+| `users` | Logins | `email` unique and lower-cased; `passwordHash` is `select: false` and never serialised; `tokenVersion` drives revocation; the self-service reset token is stored only as a SHA-256 (`resetTokenHash`, `select: false`, expiry alongside) |
 | `employees` | People records | `employeeCode` unique; optional `userId` link to a login; department/designation refs |
 | `departments`, `designations`, `leave_types`, `holidays` | Master data | Unique name/code; holidays carry a date plus an optional recurring flag |
 | `attendance` | One row per employee per day | Unique `(employeeId, date)`; status `present/late/absent/remote/leave/holiday`; `source` is `self`, `manual` or `correction` |
@@ -435,7 +441,7 @@ blocked, because the bundle is same-origin, there are no inline scripts, and Goo
 | Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `server/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
 | Static serving | `createApp(webRoot)` takes the root as a parameter, so the middleware is testable even though the default under `NODE_ENV=test` is deliberately off |
 | Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–110 s |
-| Scope | 17 files / 221 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — in `errors` the rejections happen before any route is reached, and the platform-shaped ones are fed to `errorHandler` directly because no local socket can produce them |
+| Scope | 18 files / 241 tests: setup, auth, password-recovery + remember-me (incl. the deployment gate that keeps the dev token off every deployed URL), RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — in `errors` the rejections happen before any route is reached, and the platform-shaped ones are fed to `errorHandler` directly because no local socket can produce them |
 | Frontend | `tsc --noEmit` and `vite build` only. No unit or E2E runner is installed |
 
 ---
@@ -503,7 +509,9 @@ draft, inert.
 | D32 | The Express workspace lives in `server/` and `api/` holds only the function shim | Vercel treats every file under `api/` as a Serverless Function and the Hobby plan allows at most 12 per deployment. The directory name is the platform's routing contract, so the code moved rather than the plan. The npm workspace is still *named* `api`, so every `-w api` script kept working |
 | D33 | `/api/*` reaches the function through a `rewrites` entry, not a `[...path]` filename | The catch-all file matched one segment only on this project, so `/api/v1/health` never reached Express and Vercel's own 404 answered instead. A rewrite was measured to forward any depth while keeping the original `req.url`; the shim strips the `?path=…` parameter Vercel injects so query validation sees exactly what the client sent |
 | D34 | Root `package.json` declares `"type": "module"` | Without it Vercel transpiles the function to CommonJS and the shim's import of the ESM `server/dist` handler fails at cold start with `ERR_REQUIRE_ESM`. It is inert for everything else in the repo: both workspaces declare their own `type` and the root scripts are `.mjs` |
-| D35 | A pre-route rejection is answered by the status the error declares, not only by body-parser's type names | Matching `entity.too.large` / `entity.parse.failed` / `charset.unsupported` was verified green locally and still produced `500` on Vercel, because the platform's own body decoding throws a `statusCode: 400` error with a minified `type`. The status is trusted, the upstream message never is. Safe because nothing in the app throws a bare status-carrying object — `HttpError` is matched earlier, and the assistant provider swallows upstream statuses instead of raising them |
+| D35 | “Remember me” is a longer HttpOnly cookie, nothing more | One checkbox with real behaviour behind it: the same JWT (with `exp: 7d`) and the same cookie (with `Max-Age: 604800`). No localStorage, no second token store, so the revocation model (`tokenVersion` re-checked per request) covers long sessions exactly as it covers short ones |
+| D36 | The reset token is returned in the API response **only on a local run** | HCM Lite has no email provider, so a delivered-by-mail token would make the flow untestable and unusable in the demo. `exposesResetToken = !isProd && !isDeployed` is the gate, and `isDeployed` is `process.env.VERCEL`: `isProd` alone is not enough, because a Vercel **preview** keeps `NODE_ENV` at its development default (`inferNodeEnv()` only flips it when `VERCEL_ENV === 'production'`), so an `isProd` gate would have leaked every preview URL's reset tokens to whoever requested one — account takeover, made worse by Deployment Protection being off here (limitation 11). Any deployed URL answers with the generic sentence plus the in-app notice to admins. The token stays single-use, expiry-bound and hashed at rest; the moment a mailer exists, the dev-token branch is deleted and nothing else changes |
+| D37 | A pre-route rejection is answered by the status the error declares, not only by body-parser's type names | Matching `entity.too.large` / `entity.parse.failed` / `charset.unsupported` was verified green locally and still produced `500` on Vercel, because the platform's own body decoding throws a `statusCode: 400` error with a minified `type`. The status is trusted, the upstream message never is. Safe because nothing in the app throws a bare status-carrying object — `HttpError` is matched earlier, and the assistant provider swallows upstream statuses instead of raising them |
 
 ---
 

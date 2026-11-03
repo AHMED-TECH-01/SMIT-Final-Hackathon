@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 import Layout from './components/Layout'
 import { Banner, Button, PageHeader, Spinner } from './components/ui'
 import { RouterProvider, useRouter } from './lib/router'
@@ -6,6 +7,8 @@ import { SessionProvider, useSession } from './lib/session'
 import { visibleNavItems } from './components/nav'
 import SetupScreen from './screens/SetupScreen'
 import LoginScreen from './screens/LoginScreen'
+import ForgotPasswordScreen from './screens/ForgotPasswordScreen'
+import ResetPasswordScreen from './screens/ResetPasswordScreen'
 import ChangePasswordScreen from './screens/ChangePasswordScreen'
 import DashboardScreen from './screens/DashboardScreen'
 import OrganizationScreen from './screens/OrganizationScreen'
@@ -105,11 +108,37 @@ function CurrentScreen() {
 /**
  * Decides what the visitor may see at all:
  * first-run setup → sign-in → forced password change → the app.
+ *
+ * The auth screens are real URLs: `/login` renders the sign-in card when no
+ * session exists and bounces to the dashboard when one does. The two
+ * password-recovery screens never require a session — that is the point.
  */
 function Shell() {
   const { session, loading, setupRequired } = useSession()
+  const { path, search, navigate } = useRouter()
+
+  const tokenParam = new URLSearchParams(search).get('token') ?? undefined
+
+  useEffect(() => {
+    // Auth screens and the URL must agree, in both directions: a signed-in
+    // visitor on /login lands on the dashboard, and a lost session (logout or
+    // expiry) — or any protected deep link without one — is taken to /login
+    // so the address bar shows where the user actually is.
+    if (session && path === '/login') navigate('/', { replace: true })
+  }, [session, path, navigate])
+
+  useEffect(() => {
+    const publicPaths = ['/login', '/setup', '/forgot-password', '/reset-password']
+    if (!session && !loading && !setupRequired && !publicPaths.includes(path)) {
+      navigate('/login', { replace: true })
+    }
+  }, [session, loading, setupRequired, path, navigate])
 
   if (loading) return <Splash label="Starting HCM Lite…" />
+
+  if (path === '/forgot-password') return <ForgotPasswordScreen />
+  if (path === '/reset-password') return <ResetPasswordScreen defaultToken={tokenParam} />
+
   if (setupRequired) return <SetupScreen />
   if (!session) return <LoginScreen />
   if (session.user.mustChangePassword) return <ChangePasswordScreen />

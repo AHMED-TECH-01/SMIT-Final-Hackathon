@@ -14,19 +14,24 @@ Anything else stays 🟡 or ❌. No exceptions.
 > rather than a `[...path]` filename. The npm workspace is still *named* `api`, so `npm -w api` is
 > unchanged. Verification rows from earlier sessions keep the paths they were run with.
 
-**Last updated:** 2026-11-03 (session 7 cont. 2 — transport rejections widened after reading the production function log)
-**Overall status:** 🟢 **All 12 phases delivered.** 17 test suites / **221 tests** pass, the production
+**Last updated:** 2026-11-03 (session 8 — self-service password recovery, remember-me, real `/login` URL, live browser verification; reset token gated to local runs before the push; Atlas password rotated)
+**Overall status:** 🟢 **All 12 phases delivered.** 18 test suites / **241 tests** pass, the production
 build succeeds, every screen has been driven against a live API in a real browser, the API runs
 against a persistent MongoDB Atlas cluster, it serves the built UI from the same origin, and **that
-same-origin build is deployed and verified in production**.
+same-origin build is deployed and verified in production. Session 8 re-verified the authentication
+foundation in a live browser and added what was genuinely missing: forgot/reset password, “remember
+me”, and a `/login` URL that matches what is rendered.
 **Demo readiness:** ✅ `npm run demo` boots an in-memory database, seeds it and serves the UI;
 `npm run demo -- --atlas` keeps data; `npm run build && npm run start` serves UI + API on :4000.
 **Deployment:** ✅ live on Vercel at **https://hcm-lite-eta.vercel.app**, fed by the linked GitHub
 repository. SPA, deep links, login, session cookie, RBAC and a data-backed dashboard were all
 verified against the running deployment. Vercel's own Deployment Protection was turned **off** for
 this project so the URL is publicly reachable — see limitation 11.
-**Outstanding risk:** 🔴 the Atlas password was shared in plain text and has not been rotated — and
-the deployment is now public with seeded demo logins such as `admin@hcm.test`.
+**Outstanding risk:** 🟡 the Atlas password that was shared in plain text has been **rotated** by the
+owner (session 8 row 15 — the deployment still reports `state: "connected"`), so the cluster is no
+longer open to whoever holds that string. What remains is that the deployment is public and the
+seeded demo logins (`admin@hcm.test` and colleagues) share one password that ships in
+`server/src/scripts/seed.ts`, so anyone reading this file can work it out.
 
 ---
 
@@ -46,12 +51,12 @@ the deployment is now public with seeded demo logins such as `admin@hcm.test`.
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Monorepo (npm workspaces `web` + `server`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed`. The `server/` folder is still the workspace *named* `api`, and root `api/` holds only the Vercel Function shim |
-| Backend API | ✅ | 16 route modules, **221 tests** pass |
+| Backend API | ✅ | 16 route modules, **241 tests** pass |
 | MongoDB persistence | ✅ | Runs on the in-memory server **and** against a live Atlas cluster (seed/read/write/delete verified) |
 | Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build. On Vercel the platform serves the static build instead, which is the same origin but without helmet's CSP |
 | Deployment (Vercel) | ✅ | Live at **https://hcm-lite-eta.vercel.app** — `● Ready`, GitHub-connected, Atlas reachable from the function. `scripts/verify-prod.mjs` passes against it (SPA, deep link, login, cookie flags, 26 permissions, dashboard workforce 12) |
 | MongoDB models | ✅ | 16 Mongoose models covering every domain |
-| Authentication / sessions | ✅ | JWT in HttpOnly cookie, `tokenVersion` revocation, forced password change |
+| Authentication / sessions | ✅ | JWT in HttpOnly cookie, `tokenVersion` revocation, forced password change, self-service forgot/reset password, remember-me (7-day cookie) |
 | RBAC / permissions | ✅ | 26-permission catalogue, 3 roles, enforced per request, denial tests |
 | Organization & employees | ✅ | Departments, designations, leave types, holidays, employee CRUD, CSV, directory |
 | Attendance | ✅ | Check-in/out, daily board, ledger, summary, manual marking, corrections |
@@ -69,6 +74,36 @@ the deployment is now public with seeded demo logins such as `admin@hcm.test`.
 ---
 
 ## 3. Verification log
+
+### Session 8 (2026-11-03) — authentication audited against the brief, gaps closed, driven in a live browser
+
+The brief asserted login was never implemented. It has been since session 2 (`/auth/login`, `UserModel`,
+JWT in an HttpOnly cookie, RBAC, setup wizard, 19 passing auth tests, login verified on the deployed URL
+in session 6/7 probes). What was *actually* missing against the brief was measured first, then built:
+self-service forgot/reset password, a real “remember me”, the `/login` UI elements (Welcome Back,
+show/hide password, forgot link), and a `/login` URL that matches the rendered screen. Deviations kept
+deliberately: single-tenant by design (one company, so users carry no `companyId`/`isEmailVerified` —
+the email-verification feature does not exist and the field would be a lie), cookie-session auth (so no
+`/auth/refresh` — there is no refresh-token pair), and no `/app/dashboard` prefix (the existing router
+serves the dashboard at `/`; re-basing every deep link is churn, not function).
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | New endpoints `POST /auth/forgot-password` + `POST /auth/reset-password` (`auth.service.ts`, `auth.routes.ts`) | ✅ Token is `crypto.randomBytes(32)`, stored only as SHA-256 with a 30-min expiry, single-use; unknown/inactive emails get the identical generic 200 (no enumeration); reset bumps `tokenVersion`, killing every session; forgot throttled 5 / 15 min per `ip:email` |
+| 2 | No mail provider exists — honest delivery | ⚠️ Documented decision D36: **only a local run** returns the token in the response so the flow is usable and testable; every deployed URL — preview included — answers with the generic sentence only, and admin/HR accounts receive an in-app notification that a reset was requested. The first cut of this row said "outside production", which was a leak — see rows 10–12 |
+| 3 | “Remember me” with real behaviour | ✅ `login({…, remember})` signs the JWT with `exp: 7d` and sets the same HttpOnly cookie with `Max-Age 604800`; nothing in localStorage; revocation model unchanged (D35) |
+| 4 | New suite `tests/password-recovery.test.ts` | ✅ 17 tests: token issued/hashed-at-rest, no-enumeration equality, inactive refused, validation 400, forgot throttled 429, reset sets new password, old password 401, live session revoked 401, invalid + expired + reused tokens all the same generic 422, weak and reused new passwords 422, no hash/token leakage via `/auth/me`, remember-me cookie attrs (7d vs 900s), remembered session authenticates, inactive+remember still 403 |
+| 5 | Full backend suite after the changes | ✅ **18 files, 238 tests passed** (83.76 s); server + web `tsc --noEmit` exit 0; `vite build` clean (303 kB JS) |
+| 6 | Login UI (`/login`) per the brief | ✅ “Welcome Back” + “Sign in to your HCM Lite account.”, mint-tinted background with white card, emerald Sign In with loading spinner, inline field errors from Zod details, auth-error banner, show/hide eye toggle (verified flipping `type="password"` → `"text"`), remember-me checkbox, forgot-password link, setup link rendered only while `GET /setup/status` reports setup required |
+| 7 | Live browser walk-through (`npm run demo`, :5173 → Vite → :4000 → in-memory MongoDB) | ✅ driven through the real UI and socket: wrong password → inline “Invalid email or password.” staying on `/login`; admin login with remember-me → dashboard, 11 sidebar links, 26 permissions; **F5 reload restored the session** (HttpOnly cookie); anonymous `/analytics/overview` → 401; employee session → own `/auth/me` 200 with 7 permissions, `/leave/balances` 200, `/analytics/overview` **403**; forgot → dev token → `/reset-password?token=…` (prefilled) → success banner; old password 401 / new password 200; signed-in visit to `/login` redirected to `/`; header Sign out → `/login` and `/auth/me` 401; protected deep link `/employees` while signed out → `/login` |
+| 8 | Screenshot deliverable | ❌ not captured — the embedded browser view reports `viewport=0x0, visibilityState=hidden` (`NATIVE_BROWSER_VIEWPORT_UNAVAILABLE`), the same limitation as session 4 row 2 / limitation 2; verification used live DOM snapshots instead. Opening the preview panel makes the page visible |
+| 9 | URL/screen consistency fix found by the walk-through | ✅ signing out rendered the login form at URL `/`; `App.tsx` now bounces a signed-out visitor (and any protected deep link without a session) to `/login`, and a signed-in visitor on `/login` to `/` — re-verified in the browser (row 7) |
+| 10 | 🔴 Security review of the uncommitted feature before pushing it — **found a leak in rows 1–2 as written** | ❌→✅ The gate was `return isProd ? {} : { devResetToken: token }`, and `isProd` is `NODE_ENV === 'production'`. But `inferNodeEnv()` flips `NODE_ENV` only when `VERCEL_ENV === 'production'`, so a Vercel **preview** deployment runs with `NODE_ENV=development` and would have returned a live, plaintext reset token to **anyone who POSTed an email address** at that URL — and these deployments have Deployment Protection turned off (limitation 11), so the URL is world-reachable. Combined with `tokenVersion` bumping on reset, that is account takeover on every preview URL. Nothing was pushed while it stood; fixed before the commit |
+| 11 | Fix: gate on the platform signal, not on `NODE_ENV` | ✅ `config/env.ts` now exports `isDeployed = Boolean(process.env.VERCEL)` (set on production **and** preview) and `exposesResetToken = !isProd && !isDeployed`; `auth.service.ts` returns the dev token only under `exposesResetToken`; `auth.routes.ts` JSDoc corrected. The token now reaches a caller only on a machine no one else can reach |
+| 12 | Tests for the gate itself | ✅ 3 new cases in `tests/password-recovery.test.ts`: local run open (`isDeployed false`, `exposesResetToken true`), **preview closed while `isProd` is still false** — the exact condition the old gate missed — and production closed |
+| 13 | Measurement note on row 12 | ⚠️ The production case first asserted `isProd === true` and failed. Measured with a throwaway test: `vi.stubEnv('NODE_ENV', undefined)` does delete the variable and `VERCEL_ENV` is set, yet `env.NODE_ENV` still came out `development`, because `loadEnv()` calls `process.loadEnvFile()` first and **line 9 of `server/.env` pins `NODE_ENV`** — a laptop artifact. The test asserts `isDeployed`/`exposesResetToken` instead; `NODE_ENV` inference keeps its own env tests |
+| 14 | Full suite + build after the gate | ✅ `npm test` → **18 files, 241 tests passed** (91.45 s); `npm run typecheck` exit 0; `npm run build` exit 0. `server/.env` is git-ignored (`.gitignore:46`), so the rotated Atlas password cannot be part of any push |
+| 15 | Atlas credential rotation (limitation 7 / open item 1) | ✅ rotated by the owner, then measured against the live deployment: `GET /api/v1/health/ready` → `{"ready":true,"state":"connected"}` — Vercel's function still reaches the cluster with the new secret. ⚠️ What this check **cannot** prove is that the old password is actually dead at Atlas; that is only true inside the Atlas dashboard |
 
 ### Session 7 (2026-10-31) — live audit of the deployed backend
 
@@ -171,6 +206,7 @@ time. No transaction is used anywhere in the API, so Atlas tier limits are not a
 | --- | --- | --- |
 | `tests/setup.test.ts` | 10 | One-time company setup, duplicate setup refused (409), weak password refused (422), cookie issued |
 | `tests/auth.test.ts` | 19 | Login, logout, `/me`, password change, revocation, forced change, throttling, no enumeration |
+| `tests/password-recovery.test.ts` | 17 | Forgot/reset password (token hashing, expiry, single use, no enumeration, throttling, session revocation) and remember-me cookie behaviour |
 | `tests/rbac.test.ts` | 12 | Employee/HR/admin boundaries, provisioning, duplicate email, no hash leakage |
 | `tests/users.test.ts` | 5 | Account administration: deactivate kills a live session, reset issues a one-time password |
 | `tests/organization.test.ts` | 13 | Departments, designations, leave types and holidays; delete refused while referenced |
@@ -363,7 +399,7 @@ To read why a deployment fails when the CLI only prints `● Error`:
 | AI | AI assistant + tools + smart leave + policy Q&A | ✅ | ✅ | 12 | ✅ Answers from live records; refuses company-wide questions for employees |
 
 **Totals: all 22 tracked functionalities are complete (18 numbered items + 23–25 + the AI assistant).
-221 automated tests exist and pass.**
+241 automated tests exist and pass.**
 
 > **Numbering note:** the brief's items 19–22 were never transcribed into this tracker during
 > session 1, so nothing is asserted about them here. They are not referenced by any test name,
@@ -388,9 +424,9 @@ To read why a deployment fails when the CLI only prints `● Error`:
 | Route | Screen | Guard |
 | --- | --- | --- |
 | `/` | Dashboard (company view or personal view) | signed in; personal view if no `analytics.read` |
-| `/login`, `/setup` | never rendered while signed in — both resolve to the dashboard | — |
-| *(state)* | Company setup wizard | shown when `GET /setup/status` reports `setupRequired` |
-| *(state)* | Login | shown when there is no session |
+| `/login` | Login — a real URL: rendered when there is no session; a signed-in visitor is bounced to `/` | — |
+| `/setup` | Company setup wizard — rendered when `GET /setup/status` reports `setupRequired`; a signed-in visitor is bounced to `/` | — |
+| `/forgot-password`, `/reset-password` | Self-service password recovery; never require a session; a completed reset revokes every session for the account | — |
 | *(state)* | Forced password change | shown while `mustChangePassword` is true |
 | `/organization` | Departments / designations / leave types / holidays | `organization.read` (writes need `organization.manage`) |
 | `/employees` | Directory, add/edit, archive, CSV, Employee 360 | `employee.read` |
@@ -467,19 +503,21 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 5. **Two database modes.** `npm run demo` is ephemeral by design and re-seeds on every boot;
    `npm run demo -- --atlas` writes to the cluster in `server/.env` and keeps everything.
 6. **Payroll tax is a fixed demo rule**, not a jurisdiction-accurate calculator.
-7. 🔴 **Credentials in circulation.** The Atlas connection string was pasted into this conversation
-   in plain text, so treat that password as compromised: rotate it in Atlas → Database Access, and
-   update `server/.env` to match. The same paste contained an unrelated API key that
-   matches no service this project uses — revoke it wherever it came from. The supplied JWT was the
-   public `jwt.io` sample token (`sub: 1234567890`, issued 2018) and is of no use as a credential.
-   None of these were committed (`server/.env` is git-ignored) and none were stored in memory; the
-   `JWT_SECRET` in `server/.env` was generated locally and never printed.
+7. **~~Credentials in circulation~~** — the Atlas password was pasted into this conversation in plain
+   text and has been **rotated by the owner** (2026-11-03); `server/.env` and Vercel's environment
+   both carry the new one, measured by the live function reporting `state: "connected"` on a cold
+   start. Two parts of this were never verifiable from here: that the old password is actually dead
+   in Atlas, and that the unrelated API key from the same paste was revoked at its own provider — it
+   matches no service this project uses. The supplied JWT was the public `jwt.io` sample token
+   (`sub: 1234567890`, issued 2018) and is of no use as a credential. None of these were ever
+   committed (`server/.env` is git-ignored) and none were stored in memory; the `JWT_SECRET` in
+   `server/.env` was generated locally and never printed.
 8. **~~The Atlas cluster is reachable from this one IP~~** — resolved by going public: the deployed
    function reports `{"database":{"ready":true,"state":"connected"}}`, which only happens if Vercel's
    egress is allowed, so Atlas Network Access now admits `0.0.0.0/0` (set by the owner in the Atlas
    dashboard). Vercel has no fixed egress IP, so that is the only workable setting there. The
-   consequence is stated in item 7: **while the leaked password is unrotated the cluster is reachable
-   from the whole internet.**
+   consequence, now that the leaked password is rotated: the cluster is still reachable from the
+   whole internet and is defended only by the current password plus the seeded demo credentials.
 9. **~~The Vercel deploy itself is unverified.~~** Verified on 2026-10-30: production serves the SPA
    and the API from one origin at `https://hcm-lite-eta.vercel.app`, and `scripts/verify-prod.mjs`
    passes against it. Both unknowns listed here are answered: the platform serves `web/dist` while the
@@ -517,9 +555,9 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Item | Suggested action |
 | --- | --- |
-| 🔴 Leaked Atlas password | Rotate in Atlas → Database Access, then update `MONGODB_URI` in `server/.env` |
+| ✅ ~~Leaked Atlas password~~ | Rotated by the owner (session 8 row 15); `MONGODB_URI` updated in `server/.env` and in Vercel, and the deployed function still reports `connected`. Revocation of the old password itself is not checkable from here |
 | 🔴 Unrecognised API key from the same paste | Revoke at whichever provider issued it; it is not used by this project |
-| 🔴 Atlas Network Access scope | Now `0.0.0.0/0`, and it has to stay that way for Vercel to reach the cluster — so the password rotation above is the only thing standing between the public internet and the database |
+| 🔴 Atlas Network Access scope | Now `0.0.0.0/0`, and it has to stay that way for Vercel to reach the cluster — so the rotated password and the demo credentials are the only thing standing between the public internet and the database |
 | 🔴 Deployment Protection off | The URL is public with seeded demo logins. Re-enable SSO/password protection in Vercel → Project → Settings → Deployment Protection when the demo is over, or keep it off deliberately |
 | No commit yet | First commit landed in session 6 with the push to GitHub — `server/.env` stays out |
 | Docs not versioned | ✅ Resolved in session 6: `docs/` moved inside `hcm-lite/` |
@@ -536,6 +574,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
+| 2026-11-03 | Session 8: audited the authentication foundation against the brief — login backend/UI already existed and passed; the genuine gaps were built: `POST /auth/forgot-password` + `POST /auth/reset-password` (SHA-256 one-time token, 30-min expiry, single use, no enumeration, 5/15-min throttle, admin in-app notice, session-wide revocation), remember-me (7-day HttpOnly cookie + JWT `exp`, never localStorage), the specified `/login` UI (Welcome Back, show/hide password, remember me, forgot link, loading/error states), `/forgot-password` + `/reset-password` screens, and `/login`-URL/screen consistency in `App.tsx`. New `tests/password-recovery.test.ts` (17) → **18 files / 238 tests**, server+web typecheck 0, `vite build` clean. Verified end-to-end in a live browser against `npm run demo` (login fail/success, cookie restore on refresh, RBAC denials, full reset cycle, sign-out, deep-link redirect); screenshot blocked by the hidden embedded view (limitation 2). Decisions D35–D36; deviations documented: single-tenant model, cookie sessions (no refresh pair), `/` dashboard path. | Qoder |
 | 2026-11-03 | Session 7 (cont. 2): the local-first fix was wrong about production. Deployed `299fd17`, re-measured: **413 arrived correctly** but malformed JSON and `charset=utf-32le` still answered `500` on Vercel while the same requests gave 400 / 415 against the local demo over a real socket. `vercel logs --json` showed why — the platform runtime throws `Invalid JSON` with `statusCode: 400` and a minified `type` from a `req.body` getter, before `express.json` reads the stream. `bodyParserRejection()` became `transportRejection()`: the type table resolves to a status and **any error declaring its own 4xx** is answered with our envelope and our own message (a 5xx stays a server fault). Verified nothing in the app throws a bare status-carrying object, so the rule cannot mask an intentional `HttpError`. 4 more tests drive `errorHandler` with the logged production shape — **17 files / 221 tests**, typecheck 0, build clean, `declaredClientStatus` present in `dist`. Pushed as `7fe8241`; the auto-build `hcm-lite-hz1jpfwjp` reached `● Ready` in 31 s and production now answers 413 / 400 / 400 where it answered 413 / 500 / 500 — no 500 left. A third build then showed the charset case is **400 or 415 depending on the bytes** (rows 16 and 21), so the platform only intercepts a body it cannot decode itself. | Qoder |
 | 2026-10-31 | Session 7 (cont.): fixed the defect the live audit found. `middleware/error-handler.ts` gains `bodyParserRejection()`, mapping `entity.too.large` → **413 `PAYLOAD_TOO_LARGE`**, `entity.parse.failed` → **400 `BAD_REQUEST`**, and `encoding.unsupported` / `charset.unsupported` → **415 `UNSUPPORTED_MEDIA_TYPE`** instead of the generic 500. New `server/tests/errors.test.ts` (4 tests, no MongoDB needed — `createApp(null)`) proves all three plus that a normal body still reaches the auth layer. Two rounds of measurement were needed: UTF-16LE is actually decodable (returns a 400 parse failure, correctly), and body-parser renames the rejection to `charset.unsupported`. Verified: typecheck 0, **17 files / 217 tests**, error-code table and §8 updated. Committed and pushed as `299fd17`; the 400/415 cases then proved incomplete on the platform — see the next row. | Qoder |
 | 2026-10-31 | Session 7: audited the **deployed** backend live — 28 endpoints, RBAC denial, 422 business rejections, an Atlas write round-trip, the payslip PDF and warm-container latency all confirmed against `https://hcm-lite-eta.vercel.app`. Found one application defect: a JSON body above the 100 KB limit returns `500 INTERNAL_ERROR` instead of `413`, reproduced on the local demo too (limitation 12). No code changed. | Qoder |

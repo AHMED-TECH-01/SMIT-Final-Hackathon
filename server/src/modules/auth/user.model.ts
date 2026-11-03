@@ -32,6 +32,14 @@ const userSchema = new Schema(
     tokenVersion: { type: Number, required: true, default: 0 },
 
     lastLoginAt: { type: Date, default: null },
+
+    /**
+     * Self-service password recovery. Only the SHA-256 of the one-time token
+     * is stored — a database read cannot hand out usable resets — and it is
+     * never selected by default, exactly like the password hash.
+     */
+    resetTokenHash: { type: String, default: null, select: false },
+    resetTokenExpiresAt: { type: Date, default: null, select: false },
   },
   {
     timestamps: true,
@@ -44,6 +52,8 @@ const userSchema = new Schema(
         // Defense in depth: these must never appear in a response body.
         delete ret.passwordHash
         delete ret.tokenVersion
+        delete ret.resetTokenHash
+        delete ret.resetTokenExpiresAt
         return ret
       },
     },
