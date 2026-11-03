@@ -14,8 +14,8 @@ Anything else stays 🟡 or ❌. No exceptions.
 > rather than a `[...path]` filename. The npm workspace is still *named* `api`, so `npm -w api` is
 > unchanged. Verification rows from earlier sessions keep the paths they were run with.
 
-**Last updated:** 2026-10-31 (session 7 — live audit of the deployed backend)
-**Overall status:** 🟢 **All 12 phases delivered.** 17 test suites / **217 tests** pass, the production
+**Last updated:** 2026-11-03 (session 7 cont. 2 — transport rejections widened after reading the production function log)
+**Overall status:** 🟢 **All 12 phases delivered.** 17 test suites / **221 tests** pass, the production
 build succeeds, every screen has been driven against a live API in a real browser, the API runs
 against a persistent MongoDB Atlas cluster, it serves the built UI from the same origin, and **that
 same-origin build is deployed and verified in production**.
@@ -46,7 +46,7 @@ the deployment is now public with seeded demo logins such as `admin@hcm.test`.
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Monorepo (npm workspaces `web` + `server`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed`. The `server/` folder is still the workspace *named* `api`, and root `api/` holds only the Vercel Function shim |
-| Backend API | ✅ | 16 route modules, **217 tests** pass |
+| Backend API | ✅ | 16 route modules, **221 tests** pass |
 | MongoDB persistence | ✅ | Runs on the in-memory server **and** against a live Atlas cluster (seed/read/write/delete verified) |
 | Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build. On Vercel the platform serves the static build instead, which is the same origin but without helmet's CSP |
 | Deployment (Vercel) | ✅ | Live at **https://hcm-lite-eta.vercel.app** — `● Ready`, GitHub-connected, Atlas reachable from the function. `scripts/verify-prod.mjs` passes against it (SPA, deep link, login, cookie flags, 26 permissions, dashboard workforce 12) |
@@ -88,6 +88,23 @@ production deployment `hcm-lite-in2e2ziog` reported `● Ready` (32 s).
 | 9 | Fix: `bodyParserRejection()` in `middleware/error-handler.ts` + new `tests/errors.test.ts` | ✅ measured now: 413 `PAYLOAD_TOO_LARGE` / 400 `BAD_REQUEST` / 415 `UNSUPPORTED_MEDIA_TYPE`, and a normal-size body still reaches the auth layer (401) — proving the limit check did not swallow valid requests |
 | 10 | `npm run typecheck` + `npm test` after the fix | ✅ exit 0; **17 files, 217 tests passed**, 64.56 s. The new file needs no MongoDB: `createApp(null)` never reaches a handler, so nothing touches the database |
 | 11 | Cleanup | ✅ local demo stopped (port 4000 free), probe scripts deleted |
+
+### Session 7 (cont. 2026-10-31 → 2026-11-03) — the fix deployed, and what production then revealed
+
+The first fix was committed as `299fd17` and reached production through the `git push` auto-build
+(`hcm-lite-jrauxp12p`, `● Ready` in 37 s, all three aliases flipped by themselves).
+
+| # | Check | Result |
+| --- | --- | --- |
+| 12 | `POST /api/v1/announcements` with a 200 KB body on **production** | ✅ **413 `PAYLOAD_TOO_LARGE`** with our own message text, which also proves the new code is what is running |
+| 13 | Malformed JSON and `charset=utf-32le` on **production** | ❌ **still `500 INTERNAL_ERROR`** — while the identical requests against the local demo over a real socket returned 400 and 415. So the mapping was right and incomplete, not broken |
+| 14 | `vercel logs <deployment> --json` while sending the two failing requests | ✅ caught the object the handler actually receives: `message: "Invalid JSON"`, `statusCode: 400`, `type: "ge"` (a minified name), stack `at /opt/rust/nodejs.js … at IncomingMessage.get [as body] … at jsonParser (body-parser/lib/types/json.js:112)`. **Vercel's own runtime decodes the JSON body and installs a getter on `req.body` that throws**, so `express.json` rethrows an error that carries no body-parser `type` at all. The 413 path survives because raw-body aborts the stream before that getter is read |
+| 15 | Widened the mapping into `transportRejection()` | ✅ the body-parser `type` table now resolves to a status, and any error that **declares its own 4xx** (`statusCode`/`status`, 400–499) is honoured with our envelope. A 5xx deliberately stays a server fault. Message text is always ours — the upstream `Invalid JSON` string is never echoed. Checked first that nothing in the app throws a bare status-carrying object (only `HttpError`, matched earlier) and that the AI provider swallows its own upstream statuses, so the rule cannot mask a deliberate decision |
+| 16 | Consequence of a platform that pre-parses the body | ⚠️ from the observed shape, an undecodable charset should be refused by Vercel as invalid JSON (**400**) where the local server answers **415** — both client errors, both our codes, different status. Reasoned from the logged error, **not yet re-measured**: production is still running the pre-widening build |
+| 17 | 4 new tests driving `errorHandler` directly with the production error shape (`tests/errors.test.ts`) | ✅ 8 tests in that file. A local socket cannot produce Vercel's shape, so the handler is called with the object taken from the function log: declared 400 → `BAD_REQUEST` without echoing `Invalid JSON`, declared 413/415 → same codes as the parser, unrecognised 405 → keeps 405 with a generic message, declared 503 → still `500 INTERNAL_ERROR` |
+| 18 | `npm run typecheck` / `npm test` / `npm run build` after the widening | ✅ exit 0 · **17 files, 221 tests passed** (105.30 s) · build clean, and `server/dist/middleware/error-handler.js` contains `declaredClientStatus` — the compiled artifact matches the source |
+| 19 | Control checks on production with the same script | ✅ health 200, SPA root 200, `/api/v1/nope` → JSON 404, small anonymous body → 401, authenticated draft create → 201 and cleanup DELETE → 200 (created with `status: draft` so `deliver()` sent no notifications, then deleted so production data was left as found) |
+| 20 | Re-run of rows 12–13 and 16 after this widening is deployed | ⏳ pending — measured on the next production build |
 
 ### Session 6 (2026-10-30) — production serving, deployment config, repository
 
@@ -345,7 +362,7 @@ To read why a deployment fails when the CLI only prints `● Error`:
 | AI | AI assistant + tools + smart leave + policy Q&A | ✅ | ✅ | 12 | ✅ Answers from live records; refuses company-wide questions for employees |
 
 **Totals: all 22 tracked functionalities are complete (18 numbered items + 23–25 + the AI assistant).
-217 automated tests exist and pass.**
+221 automated tests exist and pass.**
 
 > **Numbering note:** the brief's items 19–22 were never transcribed into this tracker during
 > session 1, so nothing is asserted about them here. They are not referenced by any test name,
@@ -484,11 +501,14 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
     `express.json` throws `entity.too.large`, which `middleware/error-handler.ts` did not recognise, so
     it reached the generic handler; malformed JSON and an unsupported charset took the same path.
     They now answer **413 `PAYLOAD_TOO_LARGE`**, **400 `BAD_REQUEST`** and **415
-    `UNSUPPORTED_MEDIA_TYPE`**, covered by 4 tests in `tests/errors.test.ts`. Found by measuring the
-    deployed function **and** the local in-memory demo, so it was an application gap, not platform
-    behaviour. The visible case remains `/employees/import`: a CSV above ~100 KB is refused cleanly, so
-    large imports still need splitting — the limit itself was not raised. Vercel's own 4.5 MB function
-    body cap is never reached.
+    `UNSUPPORTED_MEDIA_TYPE`**, covered by `tests/errors.test.ts`. Found by measuring the deployed
+    function **and** the local in-memory demo, so it was an application gap, not platform behaviour.
+    The first version of the fix only understood body-parser's own error types and was verified green
+    locally, yet **still returned 500 on Vercel for two of the three cases**: the platform's runtime
+    decodes the JSON body itself and throws an error carrying `statusCode: 400` with no `type`, which
+    the handler now also honours (see the session 7 cont. 2 rows). The visible case remains
+    `/employees/import`: a CSV above ~100 KB is refused cleanly, so large imports still need splitting —
+    the limit itself was not raised. Vercel's own 4.5 MB function body cap is never reached.
 
 ---
 
@@ -504,7 +524,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 | Docs not versioned | ✅ Resolved in session 6: `docs/` moved inside `hcm-lite/` |
 | ~~Deploy unverified~~ | ✅ Deployed and verified: `https://hcm-lite-eta.vercel.app`, re-checked with `node scripts/verify-prod.mjs https://<url>`. `vercel.json` did need two corrections (rewrite instead of `[...path]`, root `"type": "module"`) |
 | Browser walk-through of the deployed URL | The live checks were HTTP-level; drive the deployed UI in a real browser once (CSP is absent there because the platform serves the static build) |
-| ~~Oversized JSON body answers 500~~ | ✅ Fixed in session 7: body-parser rejections map to 413 / 400 / 415 with 4 tests in `tests/errors.test.ts`. Large `/employees/import` CSVs still have to stay under ~100 KB — that limit is unchanged |
+| ~~Oversized JSON body answers 500~~ | ✅ Fixed in session 7: transport rejections map to 413 / 400 / 415 (`tests/errors.test.ts`, 8 tests). Large `/employees/import` CSVs still have to stay under ~100 KB — that limit is unchanged |
 | No frontend tests | Add Vitest + React Testing Library for the screens that carry logic |
 | No E2E | Add Playwright for the five-minute demo path |
 | Assistant provider | Add a smoke test against a real endpoint if a key is ever supplied |
@@ -515,7 +535,8 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
-| 2026-10-31 | Session 7 (cont.): fixed the defect the live audit found. `middleware/error-handler.ts` gains `bodyParserRejection()`, mapping `entity.too.large` → **413 `PAYLOAD_TOO_LARGE`**, `entity.parse.failed` → **400 `BAD_REQUEST`**, and `encoding.unsupported` / `charset.unsupported` → **415 `UNSUPPORTED_MEDIA_TYPE`** instead of the generic 500. New `server/tests/errors.test.ts` (4 tests, no MongoDB needed — `createApp(null)`) proves all three plus that a normal body still reaches the auth layer. Two rounds of measurement were needed: UTF-16LE is actually decodable (returns a 400 parse failure, correctly), and body-parser renames the rejection to `charset.unsupported`. Verified: typecheck 0, **17 files / 217 tests**, error-code table and §8 updated. Not yet deployed — the fix is local until it is committed and pushed. | Qoder |
+| 2026-11-03 | Session 7 (cont. 2): the local-first fix was wrong about production. Deployed `299fd17`, re-measured: **413 arrived correctly** but malformed JSON and `charset=utf-32le` still answered `500` on Vercel while the same requests gave 400 / 415 against the local demo over a real socket. `vercel logs --json` showed why — the platform runtime throws `Invalid JSON` with `statusCode: 400` and a minified `type` from a `req.body` getter, before `express.json` reads the stream. `bodyParserRejection()` became `transportRejection()`: the type table resolves to a status and **any error declaring its own 4xx** is answered with our envelope and our own message (a 5xx stays a server fault). Verified nothing in the app throws a bare status-carrying object, so the rule cannot mask an intentional `HttpError`. 4 more tests drive `errorHandler` with the logged production shape — **17 files / 221 tests**, typecheck 0, build clean, `declaredClientStatus` present in `dist`. Production re-verification pending the next build. | Qoder |
+| 2026-10-31 | Session 7 (cont.): fixed the defect the live audit found. `middleware/error-handler.ts` gains `bodyParserRejection()`, mapping `entity.too.large` → **413 `PAYLOAD_TOO_LARGE`**, `entity.parse.failed` → **400 `BAD_REQUEST`**, and `encoding.unsupported` / `charset.unsupported` → **415 `UNSUPPORTED_MEDIA_TYPE`** instead of the generic 500. New `server/tests/errors.test.ts` (4 tests, no MongoDB needed — `createApp(null)`) proves all three plus that a normal body still reaches the auth layer. Two rounds of measurement were needed: UTF-16LE is actually decodable (returns a 400 parse failure, correctly), and body-parser renames the rejection to `charset.unsupported`. Verified: typecheck 0, **17 files / 217 tests**, error-code table and §8 updated. Committed and pushed as `299fd17`; the 400/415 cases then proved incomplete on the platform — see the next row. | Qoder |
 | 2026-10-31 | Session 7: audited the **deployed** backend live — 28 endpoints, RBAC denial, 422 business rejections, an Atlas write round-trip, the payslip PDF and warm-container latency all confirmed against `https://hcm-lite-eta.vercel.app`. Found one application defect: a JSON body above the 100 KB limit returns `500 INTERNAL_ERROR` instead of `413`, reproduced on the local demo too (limitation 12). No code changed. | Qoder |
 | 2026-10-30 | Session 6 (cont. 3): **the app is live at https://hcm-lite-eta.vercel.app.** The renamed layout reached `● Ready`, but every `/api/v1/*` answered Vercel's own 404: measured with echo functions in a preview, `api/[...path].js` matches a **single** segment. Replaced it with `api/index.js` plus `"rewrites": [{ "source": "/api/:path*", "destination": "/api/index" }]` (the shim drops the `?path=…` parameter Vercel injects), then fixed the cold-start `ERR_REQUIRE_ESM` that followed by declaring `"type": "module"` in the root `package.json`. Turned off Vercel's Deployment Protection, which had been answering the whole URL with an SSO login page. Verified: typecheck 0, build clean, **213 tests**, and `verify-prod.mjs` green against production — SPA, deep link, JSON 404 from Express, login with `HttpOnly; Secure; SameSite=Lax`, 26 permissions, dashboard workforce 12, `/api/v1/health` reporting Atlas connected. Docs updated (§1, §7, limitations 8–11, D33–D34). | Qoder |
 | 2026-10-30 | Session 6 (cont. 2): the two fixed deploys then failed at `patchBuild` with `exceeded_serverless_functions_per_deployment` — Vercel compiles **every** file under `api/` into a Serverless Function and the Hobby plan allows 12. Renamed the backend workspace folder `api/` → `server/` (`git mv`, 100% rename similarity), leaving `api/[...path].js` as the only file there and re-exporting `../server/dist/vercel-handler.js`; dropped the ignored `memory` key from `vercel.json`. Root `workspaces` is now `web` + `server`; the npm package is still named `api`, so every script and test command is unchanged. Verified: typecheck 0, build clean, **213 tests**, `resolveWebRoot()` → `web/dist`, shim resolves the handler. Docs updated (`server/.env` everywhere, new §7 bullets, D32). | Qoder |

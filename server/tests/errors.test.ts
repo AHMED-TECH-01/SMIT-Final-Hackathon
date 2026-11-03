@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import request from 'supertest'
-import type { Express } from 'express'
+import type { Express, Request, Response } from 'express'
 import { createApp } from '../src/app.js'
+import { errorHandler } from '../src/middleware/error-handler.js'
 
 /**
  * Bodies the parser refuses are rejected before any route or database is
@@ -57,5 +58,65 @@ describe('Body parser rejections get a client error, not a 500', () => {
 
     expect(res.status).toBe(401)
     expect(res.body.error.code).toBe('UNAUTHENTICATED')
+  })
+})
+
+/**
+ * The shape a serverless runtime hands the handler cannot always be reproduced
+ * with a local socket: Vercel decodes the JSON body inside its own runtime and
+ * throws `Invalid JSON` carrying `statusCode: 400` before `express.json` reads
+ * the stream, so no body-parser `type` is involved. The handler is driven
+ * directly with that shape, taken from a production function log.
+ */
+function handle(err: unknown): { status: number; body: { error?: { code?: string; message?: string } } } {
+  let status = 0
+  let body: Record<string, unknown> = {}
+  const res = {
+    headersSent: false,
+    statusCode: 0,
+    status(code: number) {
+      status = code
+      return res
+    },
+    json(payload: unknown) {
+      body = payload as typeof body
+      return res
+    },
+  }
+
+  errorHandler(err, {} as Request, res as unknown as Response, () => {})
+  return { status, body }
+}
+
+describe('Rejections that declare their own status are answered as client errors', () => {
+  it('maps the runtime JSON decode failure to 400 without echoing its text', () => {
+    const { status, body } = handle({ statusCode: 400, message: 'Invalid JSON' })
+
+    expect(status).toBe(400)
+    expect(body.error?.code).toBe('BAD_REQUEST')
+    expect(body.error?.message).toBe('The request body is not valid JSON.')
+    expect(body.error?.message).not.toContain('Invalid JSON')
+  })
+
+  it('maps a declared 413 and 415 to the same codes the parser produces', () => {
+    expect(handle({ status: 413, message: 'too large' }).body.error?.code).toBe('PAYLOAD_TOO_LARGE')
+    expect(handle({ statusCode: 415, message: 'unsupported' }).body.error?.code).toBe(
+      'UNSUPPORTED_MEDIA_TYPE',
+    )
+  })
+
+  it('keeps an unrecognised 4xx at its own status with a generic message', () => {
+    const { status, body } = handle({ statusCode: 405, message: 'Method Not Allowed' })
+
+    expect(status).toBe(405)
+    expect(body.error?.message).toBe('The request could not be processed.')
+  })
+
+  it('still treats a 5xx as a server fault', () => {
+    const { status, body } = handle({ statusCode: 503, message: 'Service Unavailable' })
+
+    expect(status).toBe(500)
+    expect(body.error?.code).toBe('INTERNAL_ERROR')
+    expect(body.error?.message).not.toContain('Service Unavailable')
   })
 })

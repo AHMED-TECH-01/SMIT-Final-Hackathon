@@ -1,12 +1,12 @@
 # HCM Lite — Architecture
 
-**Status:** 🟢 **All 12 phases are built and tested** — 17 test suites / 217 tests, plus a full browser
+**Status:** 🟢 **All 12 phases are built and tested** — 17 test suites / 221 tests, plus a full browser
 walk-through against a live API, a verified production same-origin build and a live audit of the
 deployed backend.
 This document describes *what exists*. Where a rule was planned but not implemented it says so
 explicitly. Read alongside `docs/PROGRESS.md`.
 
-**Last updated:** 2026-10-31 (session 7)
+**Last updated:** 2026-11-03 (session 7 cont. 2)
 
 ---
 
@@ -186,7 +186,7 @@ permission it requires.
 | Code | Status | Source |
 | --- | --- | --- |
 | `VALIDATION_ERROR` | 400 | Zod (body/query/params), `details: [{ field, message }]` |
-| `BAD_REQUEST` | 400 | the body is not valid JSON (`express.json` parse failure) |
+| `BAD_REQUEST` | 400 | the body is not valid JSON — `express.json`'s `entity.parse.failed`, or the 400 that Vercel's own runtime throws when it decodes the body first |
 | `UNAUTHENTICATED` | 401 | missing/invalid cookie, revoked session, bad credentials |
 | `ACCOUNT_INACTIVE` | 403 | deactivated user |
 | `PASSWORD_CHANGE_REQUIRED` | 403 | `mustChangePassword` still true |
@@ -196,7 +196,7 @@ permission it requires.
 | `UNPROCESSABLE` | 422 | weak/reused password, business rule violation (e.g. insufficient balance) |
 | `RATE_LIMITED` | 429 | login throttling (sends `Retry-After`) |
 | `PAYLOAD_TOO_LARGE` | 413 | body above the 100 kb JSON limit — mapped from `entity.too.large` |
-| `UNSUPPORTED_MEDIA_TYPE` | 415 | body in a charset the parser will not decode (`charset.unsupported` / `encoding.unsupported`) |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | body in a charset the parser will not decode (`charset.unsupported` / `encoding.unsupported`). On Vercel this case is refused earlier by the platform as invalid JSON and answers **400** instead — still a client error with our envelope |
 | `INTERNAL_ERROR` | 500 | unexpected — logged server-side, never a stack trace in the body |
 
 ---
@@ -328,6 +328,13 @@ process is started:
 | `server/src/scripts/dev.ts` | `npm run demo` | In-memory MongoDB, `reset: true` seed, then imports `server.ts` |
 | `server/src/vercel-handler.ts` | `api/index.js` (the one Vercel Function) | Exports the app as a request handler; memoises the connection and the app per warm container, because a function is reused across invocations but torn down without a signal |
 
+The serverless shape is not a plain Node socket. Vercel's runtime decodes the request body itself and
+exposes it through a getter on `req.body`, so a body that is not valid JSON fails **inside**
+`express.json` with an error that declares `statusCode: 400` and carries no body-parser `type`. That is
+why `middleware/error-handler.ts` answers a rejection by the status the error declares as well as by
+body-parser's type names, and why a charset the local server refuses with 415 is refused as invalid
+JSON on the platform. Only 4xx is honoured; a 5xx stays a server fault.
+
 ### vercel.json
 
 The deployment is a **monorepo with a static SPA and one API function reached through a rewrite**:
@@ -427,7 +434,7 @@ blocked, because the bundle is same-origin, there are no inline scripts, and Goo
 | Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `server/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
 | Static serving | `createApp(webRoot)` takes the root as a parameter, so the middleware is testable even though the default under `NODE_ENV=test` is deliberately off |
 | Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–110 s |
-| Scope | 17 files / 217 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — `createApp(null)` needs no database because nothing reaches a handler |
+| Scope | 17 files / 221 tests: setup, auth, RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — in `errors` the rejections happen before any route is reached, and the platform-shaped ones are fed to `errorHandler` directly because no local socket can produce them |
 | Frontend | `tsc --noEmit` and `vite build` only. No unit or E2E runner is installed |
 
 ---
@@ -495,6 +502,7 @@ draft, inert.
 | D32 | The Express workspace lives in `server/` and `api/` holds only the function shim | Vercel treats every file under `api/` as a Serverless Function and the Hobby plan allows at most 12 per deployment. The directory name is the platform's routing contract, so the code moved rather than the plan. The npm workspace is still *named* `api`, so every `-w api` script kept working |
 | D33 | `/api/*` reaches the function through a `rewrites` entry, not a `[...path]` filename | The catch-all file matched one segment only on this project, so `/api/v1/health` never reached Express and Vercel's own 404 answered instead. A rewrite was measured to forward any depth while keeping the original `req.url`; the shim strips the `?path=…` parameter Vercel injects so query validation sees exactly what the client sent |
 | D34 | Root `package.json` declares `"type": "module"` | Without it Vercel transpiles the function to CommonJS and the shim's import of the ESM `server/dist` handler fails at cold start with `ERR_REQUIRE_ESM`. It is inert for everything else in the repo: both workspaces declare their own `type` and the root scripts are `.mjs` |
+| D35 | A pre-route rejection is answered by the status the error declares, not only by body-parser's type names | Matching `entity.too.large` / `entity.parse.failed` / `charset.unsupported` was verified green locally and still produced `500` on Vercel, because the platform's own body decoding throws a `statusCode: 400` error with a minified `type`. The status is trusted, the upstream message never is. Safe because nothing in the app throws a bare status-carrying object — `HttpError` is matched earlier, and the assistant provider swallows upstream statuses instead of raising them |
 
 ---
 
