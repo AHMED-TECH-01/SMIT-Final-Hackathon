@@ -162,10 +162,22 @@ export default function LoginScreen() {
             </form>
 
             {/* Registration on this product is the one-time company setup; the
-                link only appears while the server still reports setup pending. */}
+                link only appears while the server still reports setup pending.
+                Sign-up and the wizard are two doors to the same creation path. */}
             {setupRequired && (
               <p className="text-[12.5px] text-ink-secondary mt-5 text-center">
                 New company?{' '}
+                <a
+                  href="/signup"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    navigate('/signup')
+                  }}
+                  className="font-medium text-primary hover:text-primary-dark"
+                >
+                  Create a company account
+                </a>{' '}
+                or{' '}
                 <a
                   href="/setup"
                   onClick={(event) => {
@@ -174,7 +186,7 @@ export default function LoginScreen() {
                   }}
                   className="font-medium text-primary hover:text-primary-dark"
                 >
-                  Run company setup
+                  run company setup
                 </a>
               </p>
             )}

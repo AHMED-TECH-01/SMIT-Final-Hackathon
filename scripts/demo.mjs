@@ -1,7 +1,7 @@
 /**
  * Runs the whole demo with one command: `npm run demo`.
  *
- * Two database modes:
+ * Three database modes:
  *
  *   npm run demo                 In-memory MongoDB. Started, seeded and
  *                                discarded with the process. Needs no .env and
@@ -11,6 +11,10 @@
  *                                Run `npm run seed -w api` first if it is
  *                                empty; the seed refuses to overwrite a
  *                                populated database.
+ *   npm run demo -- --empty      In-memory MongoDB with no seed. The company
+ *                                record is missing on purpose, so `/` shows the
+ *                                landing page and `/signup` can register the
+ *                                first administrator. Restarting discards it.
  *
  * Either way the API serves :4000, Vite serves the UI on :5173 and proxies
  * /api to the API so the session cookie stays first-party. Ctrl+C stops both.
@@ -18,6 +22,7 @@
 import { spawn } from 'node:child_process'
 
 const PERSISTENT = process.argv.includes('--atlas')
+const EMPTY = process.argv.includes('--empty')
 const IS_WINDOWS = process.platform === 'win32'
 const npm = IS_WINDOWS ? 'npm.cmd' : 'npm'
 const children = []
@@ -62,11 +67,19 @@ function stopAll() {
 process.on('SIGINT', stopAll)
 process.on('SIGTERM', stopAll)
 
-start('[api]', PERSISTENT ? `${npm} run dev -w api` : `${npm} run dev:mem -w api`)
+const apiCommand = PERSISTENT
+  ? `${npm} run dev -w api`
+  : EMPTY
+    ? `${npm} run dev:empty -w api`
+    : `${npm} run dev:mem -w api`
+
+start('[api]', apiCommand)
 start('[web]', `${npm} run dev -w web`)
 
-process.stdout.write(
-  PERSISTENT
-    ? '\nHCM Lite demo starting against the database in server/.env (data is kept)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n'
-    : '\nHCM Lite demo starting with an in-memory database (data is discarded on exit)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n',
-)
+const banner = PERSISTENT
+  ? '\nHCM Lite demo starting against the database in server/.env (data is kept)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n'
+  : EMPTY
+    ? '\nHCM Lite demo starting with an empty in-memory database — /signup is open\n  UI    http://localhost:5173\n  API   http://localhost:4000/api/v1/health\n  Check `npm run verify:signup` in another terminal to walk the sign-up flow end to end\n\n'
+    : '\nHCM Lite demo starting with a seeded in-memory database (data is discarded on exit)\n  UI   http://localhost:5173\n  API  http://localhost:4000/api/v1/health\n\n'
+
+process.stdout.write(banner)

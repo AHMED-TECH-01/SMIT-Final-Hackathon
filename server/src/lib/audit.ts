@@ -7,6 +7,13 @@ export interface AuditInput {
   entity: string
   entityId?: string
   meta?: Record<string, unknown>
+  /**
+   * Only for actions performed before a session exists — company registration,
+   * where the actor is the account being created. Every other call leaves these
+   * out and is attributed from `req.user`, which the auth middleware set.
+   */
+  actorId?: string
+  actorEmail?: string
 }
 
 /**
@@ -18,8 +25,8 @@ export interface AuditInput {
 export async function recordAudit(req: Request, input: AuditInput): Promise<void> {
   try {
     await AuditLogModel.create({
-      actorId: req.user?.id,
-      actorEmail: req.user?.email,
+      actorId: input.actorId ?? req.user?.id,
+      actorEmail: input.actorEmail ?? req.user?.email,
       action: input.action,
       entity: input.entity,
       entityId: input.entityId,

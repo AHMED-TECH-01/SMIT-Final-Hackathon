@@ -1,13 +1,13 @@
 # HCM Lite — Architecture
 
-**Status:** 🟢 **All 12 phases are built and tested** — 18 test suites / 241 tests, plus a full browser
+**Status:** 🟢 **All 12 phases are built and tested** — 19 test suites / 276 tests, plus a full browser
 walk-through against a live API, a verified production same-origin build and a live audit of the
 deployed backend.
 This document describes *what exists*. Where a rule was planned but not implemented it says so
 explicitly. Read alongside `docs/PROGRESS.md`.
 
-**Last updated:** 2026-11-03 (session 8 — self-service password recovery, remember-me, real /login URL;
-reset token handed out on local runs only)
+**Last updated:** 2026-11-03 (session 9 — public landing page at `/`, company self-registration at
+`/signup` and `POST /auth/register`; `UI_REGISTRY.md` added as the single screen/route registry)
 
 ---
 
@@ -17,7 +17,7 @@ reset token handed out on local runs only)
 Development  http://localhost:5173
   └─ Vite dev server (proxy /api → :4000, so the session cookie stays first-party)
         └─ hcm-lite/web   React 18 + TS + Tailwind 3
-              ├─ 14 screens behind a hand-written history router
+              ├─ 18 screens behind a hand-written history router (11 signed-in, 6 auth/onboarding, 1 public landing)
               ├─ SessionProvider (GET /auth/me → user + permissions)
               └─ one `api` client — every screen is wired to the real API
 
@@ -29,6 +29,7 @@ Production  one origin
         └─ MongoDB
               ├─ persistent: MONGODB_URI from server/.env (Atlas, or any reachable server)
               ├─ `npm run demo`: throwaway mongodb-memory-server instance, seeded on boot
+              ├─ `npm run demo -- --empty`: same instance, **not seeded** — the only mode where `/signup` can succeed
               └─ serverless:  server/src/vercel-handler.ts exports the same app (see §7)
 
   hcm-lite/api/  holds exactly one file — `api/index.js`, the Vercel Function entry.
@@ -45,6 +46,7 @@ prototype) was deleted in session 4.
 | --- | --- | --- |
 | Entry | `src/server.ts` | Connect DB, env bootstrap, `listen`, graceful shutdown |
 | Demo entry | `src/scripts/dev.ts` | In-memory MongoDB → seed → `import('../server.js')` |
+| Empty demo entry | `src/scripts/dev-empty.ts` | In-memory MongoDB → **no seed** → same app, so `/setup` and `/signup` start reachable |
 | App factory | `src/app.ts` | Builds the app **without** binding a port (tests reuse it) |
 | Config | `config/env.ts`, `config/db.ts` | Zod-validated env (fail-fast, loads `.env` via `process.loadEnvFile`), Mongoose lifecycle |
 | Lib | `lib/logger.ts`, `http-error.ts`, `response.ts`, `async-handler.ts`, `fixed-window-limiter.ts`, `dates.ts`, `working-days.ts`, `pagination.ts`, `crud-router.ts`, `csv.ts`, `pdf.ts`, `audit.ts`, `notify.ts` | Cross-cutting helpers |
@@ -60,7 +62,7 @@ prototype) was deleted in session 4.
 | Shell | `src/App.tsx` | Route table + guard chain (setup → login → forced password change → app) |
 | Chrome | `components/Layout.tsx`, `Sidebar.tsx`, `Header.tsx`, `nav.ts` | Shell, permission-filtered navigation |
 | UI kit | `components/ui.tsx`, `components/icons.tsx` | Button, Field, Input, Select, Checkbox, Banner, EmptyState, Loading, Badge, `statusTone`, Table, Modal, Tabs, Stat, Panel, Avatar, BarRow; ~40 inline SVG icons |
-| Screens | `src/screens/*.tsx` | 14 screens, each owning its own data fetching |
+| Screens | `src/screens/*.tsx` | 18 screens, each owning its own data fetching; `LandingScreen` and `SignupScreen` are the two public pages rendered only while signed out |
 | Plumbing | `lib/router.tsx`, `lib/session.tsx`, `lib/api.ts`, `lib/hooks.ts`, `lib/format.ts`, `lib/types.ts` | History router, session context, fetch client, `useAsync`/`useAction`, formatters, wire types |
 | Tokens | `tailwind.config.js`, `styles/globals.css` | Colour, radius, shadow, sizing tokens |
 
@@ -98,6 +100,7 @@ permission it requires.
 | health | `GET /health/ready` | public | Readiness probe |
 | setup | `GET /setup/status` | public | `{ setupRequired }` |
 | setup | `POST /setup` | public, one-time | Creates company + first admin, sets the cookie; `409` if already set up |
+| auth | `POST /auth/register` | public, one-time | Company self-registration from `/signup`: nested Zod schema (administrator + company + both consents), delegates to the same `performSetup()` as `/setup` so the role and the company key are fixed server-side, throttled 5 / 60 min per IP, `409` once a company exists, `201` with a session cookie and no secrets |
 | auth | `POST /auth/login` | public | Throttled 10 / 15 min per `ip:email`; sets cookie; `remember: true` extends it to 7 days |
 | auth | `POST /auth/logout` | public | Clears the cookie, idempotent |
 | auth | `GET /auth/me` | session | Identity + effective permission list |
@@ -214,8 +217,8 @@ the calendar day**, never as a local timestamp.
 
 | Collection | Purpose | Notable constraints |
 | --- | --- | --- |
-| `companies` | The single tenant | `key` unique + immutable, always `'primary'` — this is what makes one-time setup safe under concurrency |
-| `users` | Logins | `email` unique and lower-cased; `passwordHash` is `select: false` and never serialised; `tokenVersion` drives revocation; the self-service reset token is stored only as a SHA-256 (`resetTokenHash`, `select: false`, expiry alongside) |
+| `companies` | The single tenant | `key` unique + immutable, always `'primary'` — this is what makes one-time setup safe under concurrency, and what makes registration a once-per-database event. Gained `industry`, `companySize`, `country`, `city` for the sign-up form (all optional, defaulted, so no migration was needed) |
+| `users` | Logins | `email` unique and lower-cased; `passwordHash` is `select: false` and never serialised; `tokenVersion` drives revocation; the self-service reset token is stored only as a SHA-256 (`resetTokenHash`, `select: false`, expiry alongside); gained `phone` for the first administrator |
 | `employees` | People records | `employeeCode` unique; optional `userId` link to a login; department/designation refs |
 | `departments`, `designations`, `leave_types`, `holidays` | Master data | Unique name/code; holidays carry a date plus an optional recurring flag |
 | `attendance` | One row per employee per day | Unique `(employeeId, date)`; status `present/late/absent/remote/leave/holiday`; `source` is `self`, `manual` or `correction` |
@@ -305,11 +308,12 @@ runs the seed against an in-memory MongoDB and reads the result back through the
 `MONGODB_URI` before `config/env.ts` is imported, seeds with `reset: true`, then imports `server.ts`.
 Root `scripts/demo.mjs` (`npm run demo`) runs that plus Vite, prefixes the output, and stops both on Ctrl+C.
 
-### Two ways to point the API at a database
+### Three ways to point the API at a database
 
 | Path | Where `MONGODB_URI` comes from | Lifecycle |
 | --- | --- | --- |
 | `npm run demo` | `dev.ts` sets it to an in-memory server | Seeded with `reset: true`, destroyed on exit; no `.env` needed |
+| `npm run demo -- --empty` | `dev-empty.ts` sets it to an in-memory server | **Not seeded**, destroyed on exit — `setupRequired` is `true`, so `/signup` and `/setup` can actually create a company |
 | `npm run demo -- --atlas`, `npm run dev:api` | `server/.env`, loaded by `config/env.ts` via `process.loadEnvFile` | Persistent; seed once by hand |
 
 `config/env.ts` validates and freezes the environment at import time, which is why nothing that
@@ -440,8 +444,8 @@ blocked, because the bundle is same-origin, there are no inline scripts, and Goo
 | Determinism | `fileParallelism: false`, sequential tests, `clearTestDb()` + `resetLoginRateLimit()` + `invalidateCompanySettings()` in `beforeEach` |
 | Isolation from `.env` | `tests/setup-env.ts` sets `MONGODB_URI` and `JWT_SECRET` before any import, so a populated `server/.env` cannot redirect the suite at a live cluster — verified by fingerprinting Atlas before and after a full run |
 | Static serving | `createApp(webRoot)` takes the root as a parameter, so the middleware is testable even though the default under `NODE_ENV=test` is deliberately off |
-| Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–110 s |
-| Scope | 18 files / 241 tests: setup, auth, password-recovery + remember-me (incl. the deployment gate that keeps the dev token off every deployed URL), RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — in `errors` the rejections happen before any route is reached, and the platform-shaped ones are fed to `errorHandler` directly because no local socket can produce them |
+| Speed | `BCRYPT_ROUNDS=4` in tests (12 in production); the suite runs in 60–130 s depending on the machine load — 77.52 s and 126.34 s were both measured in session 9 |
+| Scope | 19 files / 276 tests: setup, **registration** (public company sign-up), auth, password-recovery + remember-me (incl. the deployment gate that keeps the dev token off every deployed URL), RBAC, users, organization, employees, attendance, leave, payroll, analytics, announcements, settings, assistant, units, seed, static-web, errors. Only `static-web` and `errors` run without MongoDB — in `errors` the rejections happen before any route is reached, and the platform-shaped ones are fed to `errorHandler` directly because no local socket can produce them |
 | Frontend | `tsc --noEmit` and `vite build` only. No unit or E2E runner is installed |
 
 ---
@@ -512,36 +516,59 @@ draft, inert.
 | D35 | “Remember me” is a longer HttpOnly cookie, nothing more | One checkbox with real behaviour behind it: the same JWT (with `exp: 7d`) and the same cookie (with `Max-Age: 604800`). No localStorage, no second token store, so the revocation model (`tokenVersion` re-checked per request) covers long sessions exactly as it covers short ones |
 | D36 | The reset token is returned in the API response **only on a local run** | HCM Lite has no email provider, so a delivered-by-mail token would make the flow untestable and unusable in the demo. `exposesResetToken = !isProd && !isDeployed` is the gate, and `isDeployed` is `process.env.VERCEL`: `isProd` alone is not enough, because a Vercel **preview** keeps `NODE_ENV` at its development default (`inferNodeEnv()` only flips it when `VERCEL_ENV === 'production'`), so an `isProd` gate would have leaked every preview URL's reset tokens to whoever requested one — account takeover, made worse by Deployment Protection being off here (limitation 11). Any deployed URL answers with the generic sentence plus the in-app notice to admins. The token stays single-use, expiry-bound and hashed at rest; the moment a mailer exists, the dev-token branch is deleted and nothing else changes |
 | D37 | A pre-route rejection is answered by the status the error declares, not only by body-parser's type names | Matching `entity.too.large` / `entity.parse.failed` / `charset.unsupported` was verified green locally and still produced `500` on Vercel, because the platform's own body decoding throws a `statusCode: 400` error with a minified `type`. The status is trusted, the upstream message never is. Safe because nothing in the app throws a bare status-carrying object — `HttpError` is matched earlier, and the assistant provider swallows upstream statuses instead of raising them |
+| D38 | Public registration delegates to `performSetup()` instead of being a second creation path | There was already exactly one place that fixes the company key, assigns the admin role, hashes the password, refuses a duplicate and rolls the company row back if the administrator insert fails. A second implementation would have had to re-decide all of that, and the client-controlled-role risk the brief warns about exists precisely in that duplication. `registerCompany()` is a shape translation and nothing else |
+| D39 | Unknown request keys are stripped, not rejected | `validate({ body })` uses Zod objects that are not `.strict()`, so a browser sending `role`, `companyId` or `setupComplete` has those keys dropped before Mongoose ever sees them. What remains is fixed in code, not in the request: `key` is `unique + immutable` with `default: 'primary'`, and `role` is an enum set by `performSetup()`. Rejecting unknown keys outright would break every future client-side addition for a protection that costs nothing here |
+| D40 | Registration is throttled per IP alone | Login and forgot-password key on `ip:email` because there is an account to protect; registration has none, and it can succeed once per database, so the meaningful abuse is repeated hammering from one address: 5 / 60 min per IP with `X-RateLimit-Remaining` and `Retry-After` |
+| D41 | Audit entries for pre-session actions carry an explicit actor | `recordAudit()` attributed everything from `req.user`, which registration cannot have — the session is created by that very request — so `auth.register` logged `actorId: null`. `AuditInput` now accepts optional `actorId` / `actorEmail` for exactly this case; the register route passes the account it just created. Found by driving the live flow, not by a test: the old test asserted an entry existed, which was true with no author |
+| D42 | `/` is the landing page while signed out and the dashboard while signed in | The alternative was re-basing every deep link, bookmark and `verify-prod.mjs` check under an `/app` prefix to free `/` for marketing. One guard on `!session` in `App.tsx` decides which of the two `/` serves, so nothing else in the router had to move |
+| D43 | The public pages state nothing that cannot be checked in this repository | Stats are the product's own countable numbers (25+ functionalities / 9 modules / one platform); there are no customer counts, uptime figures, logos or testimonials, the dashboard preview is labelled a preview and reads no database, and the Contact section lists the routes that exist instead of inventing an email or phone number that no provider could answer |
+| D44 | A third demo mode exists so the sign-up flow is executable | On a seeded or already-registered database `/signup` can only ever 409, so verifying it required an unseeded in-memory boot: `npm run dev:empty -w api` and `npm run demo -- --empty`. Deliberately not the default, because the default mode's job is to show every screen with data in it. The walk is committed as `scripts/verify-signup.mjs`, which reads `GET /setup/status` and stays read-only wherever a company already exists — the same script is safe against a throwaway database and informative against a deployment |
 
 ---
 
 ## 11. Known architectural debt
 
 1. **No automated UI tests.** `web/` is gated by `tsc` and `vite build` only; regressions in rendering
-   or interaction are caught by hand.
-2. ~~**`docs/` sits outside the git repository**~~ — resolved in session 6: the documents live in
+   or interaction are caught by hand. Session 9 added a repeatable HTTP walk of the built bundle served
+   by the API (`docs/PROGRESS.md` §3 row 14), which proves wiring and responses but not rendering.
+2. **No lint step.** There is no ESLint configuration and no `lint` script anywhere in the repository,
+   so `tsc --noEmit` in both workspaces is the only static gate. Introducing one is its own task, since
+   nothing has ever been measured against those rules.
+3. ~~**`docs/` sits outside the git repository**~~ — resolved in session 6: the documents live in
    `hcm-lite/docs/` and are versioned with the code. History is deliberately short: the first commit
    is the session 6 tree, because `server/.env` (Atlas credentials) could never be included in a
    published repository and a `.gitignore` entry does not remove a file from history.
-3. **Screens own their data fetching.** Fine for 14 screens; a shared cache layer would remove
+4. **Screens own their data fetching.** Fine for 18 screens; a shared cache layer would remove
    duplicate requests (for example settings fetched per screen).
-4. **Two database paths must be kept in step.** The in-memory demo seeds itself on boot, while the
-   persistent mode needs a manual `npm run seed`; forgetting it leaves a running API with no data.
-5. **Payroll tax is a single flat percentage** per structure — a demo rule, not a jurisdiction-aware
+5. **Three database paths must be kept in step.** The seeded demo seeds itself on boot, `--empty` must
+   stay unseeded (that is its only purpose), and the persistent mode needs a manual `npm run seed`;
+   forgetting it leaves a running API with no data.
+6. **Payroll tax is a single flat percentage** per structure — a demo rule, not a jurisdiction-aware
    calculator.
-6. **The `openai` assistant provider is untested against a real endpoint.**
-7. **Routes and services share a file** in the smaller modules (analytics, audit, notifications); the
+7. **The `openai` assistant provider is untested against a real endpoint.**
+8. **Routes and services share a file** in the smaller modules (analytics, audit, notifications); the
    larger ones (payroll, leave, attendance) are already split.
-8. 🔴 **The Atlas password was disclosed in plain text** and is live in `server/.env`, while Atlas
+9. 🔴 **The Atlas password was disclosed in plain text** and is live in `server/.env`, while Atlas
    Network Access now admits `0.0.0.0/0` because Vercel has no fixed egress IP, and the deployed app is
    public. It must be rotated before this configuration is used for anything real. `server/.env` is
    git-ignored, so the exposure is the conversation and the file on disk, not the repository.
-9. **The serverless path is proven, its tail behaviours are not.** A function has run on Vercel and
-   served authenticated traffic from Atlas, but cold-start latency against a WAN-round-trip cluster and
-   the request/response size limits on payslip PDFs are still unmeasured assumptions.
-10. **Every cold start pays for a remote database.** In-memory development hides this; a deployed
+10. **The serverless path is proven, its tail behaviours are not.** A function has run on Vercel and
+    served authenticated traffic from Atlas, but cold-start latency against a WAN-round-trip cluster and
+    the request/response size limits on payslip PDFs are still unmeasured assumptions.
+11. **Every cold start pays for a remote database.** In-memory development hides this; a deployed
     function opens a new connection pool per container, which is worth revisiting (or moving to a
     connection proxy) if the demo is ever exposed to real traffic.
-11. **On Vercel the SPA never passes through Express.** The platform serves `web/dist`, so the shell and
+12. **On Vercel the SPA never passes through Express.** The platform serves `web/dist`, so the shell and
     assets carry Vercel's cache headers and **no CSP** — helmet's policy (and the `immutable` asset
     caching) only applies when the API serves the build, as it does in `npm run start` and `npm run demo`.
+13. **Sign-up is one-shot per deployment, by construction.** The public `/signup` writes through the
+    same `key: 'primary'` constraint as `/setup`, so the second company is refused with 409 — correct
+    for this architecture, misleading for a visitor who just filled in a form. Real self-service
+    onboarding means tenant-scoping all 16 models (`companyId` on every document and every query) and
+    rendering the sign-up failure state as "your account is being provisioned" rather than "sign in
+    instead". That is a migration, and a partial one would leak across tenants.
+14. **The landing page is one 965-line file.** It renders as sections (`NavBar`, `Hero`, `StatsBand`,
+    `Features`, `Modules`, `HowItWorks`, `About`, `Contact`, `Footer`) but shares no file with them, and
+    there is no router-level code splitting, so a visitor who reads the marketing copy also downloads
+    the payroll and attendance screens. Splitting the file and adding a lazy boundary are both mechanical
+    changes that no current test would protect — which is itself item 1.

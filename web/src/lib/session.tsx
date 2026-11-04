@@ -22,11 +22,41 @@ export interface SessionState {
   permissions: string[]
 }
 
+/**
+ * What the public sign-up page submits.
+ *
+ * The shape is the server's (`registerSchema` in setup.service.ts): two named
+ * sections and the two consents. There is deliberately no role, status or
+ * company id here — the server decides the first administrator is an `admin`,
+ * and anything else sent is stripped before it reaches the creation path.
+ */
+export interface RegisterDetails {
+  admin: {
+    name: string
+    email: string
+    phone: string
+    password: string
+    confirmPassword: string
+  }
+  company: {
+    name: string
+    industry: string
+    companySize: string
+    country: string
+    city: string
+    email: string
+    phone: string
+  }
+  acceptedTerms: boolean
+  acceptedPrivacyPolicy: boolean
+}
+
 interface SessionValue {
   session: SessionState | null
   loading: boolean
   setupRequired: boolean
   signIn: (email: string, password: string, remember?: boolean) => Promise<void>
+  registerCompany: (details: RegisterDetails) => Promise<void>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
   markSetupComplete: (user: User) => void
@@ -80,6 +110,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setSetupRequired(false)
   }, [])
 
+  const registerCompany = useCallback(async (details: RegisterDetails) => {
+    // Creates the deployment's company and its first administrator, and the
+    // server answers with the session cookie already set — the sign-up page
+    // therefore lands signed in, with no second round trip through the form.
+    await api.post<{ company: { id: string; name: string }; user: User }>(
+      '/auth/register',
+      details,
+    )
+    const me = await api.get<{ user: User; permissions: string[] }>('/auth/me')
+    setSession({ user: me.data.user, permissions: me.data.permissions })
+    setSetupRequired(false)
+  }, [])
+
   const signOut = useCallback(async () => {
     try {
       await api.post('/auth/logout')
@@ -103,12 +146,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       loading,
       setupRequired,
       signIn,
+      registerCompany,
       signOut,
       refresh,
       markSetupComplete,
       can: (permission: string) => session?.permissions.includes(permission) ?? false,
     }),
-    [session, loading, setupRequired, signIn, signOut, refresh, markSetupComplete],
+    [session, loading, setupRequired, signIn, registerCompany, signOut, refresh, markSetupComplete],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>

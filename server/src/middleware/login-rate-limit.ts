@@ -19,6 +19,13 @@ const limiter = new FixedWindowLimiter(MAX_ATTEMPTS, WINDOW_MS)
 const FORGOT_MAX_ATTEMPTS = 5
 const forgotLimiter = new FixedWindowLimiter(FORGOT_MAX_ATTEMPTS, WINDOW_MS)
 
+// Company registration can only ever succeed once per deployment, so the
+// interesting attack is someone hammering it from one address: key on the IP
+// alone (there is no account to protect yet) over a longer window.
+const REGISTER_MAX_ATTEMPTS = 5
+const REGISTER_WINDOW_MS = 60 * 60 * 1000
+const registerLimiter = new FixedWindowLimiter(REGISTER_MAX_ATTEMPTS, REGISTER_WINDOW_MS)
+
 export const loginRateLimit: RequestHandler = (req, res, next) => {
   const rawEmail = typeof req.body?.email === 'string' ? req.body.email.toLowerCase() : 'anonymous'
   const key = `${req.ip ?? 'unknown'}:${rawEmail}`
@@ -57,8 +64,24 @@ export const forgotPasswordRateLimit: RequestHandler = (req, res, next) => {
   next()
 }
 
+/** Throttles POST /auth/register per IP, for as long as registration is possible. */
+export const registerRateLimit: RequestHandler = (req, res, next) => {
+  const key = req.ip ?? 'unknown'
+
+  const result = registerLimiter.hit(key)
+  res.setHeader('X-RateLimit-Remaining', String(result.remaining))
+
+  if (result.limited) {
+    res.setHeader('Retry-After', String(result.retryAfter))
+    return next(tooManyRequests('Too many sign-up attempts. Please try again later.'))
+  }
+
+  next()
+}
+
 /** Test helper. */
 export function resetLoginRateLimit(): void {
   limiter.resetAll()
   forgotLimiter.resetAll()
+  registerLimiter.resetAll()
 }

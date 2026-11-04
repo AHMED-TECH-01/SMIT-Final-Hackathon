@@ -15,6 +15,12 @@ const userSchema = new Schema(
       maxlength: 160,
     },
     fullName: { type: String, required: true, trim: true, maxlength: 120 },
+    /**
+     * Contact number supplied at registration or by an administrator. Optional
+     * with an empty default: accounts created before it existed, and every
+     * seeded account, simply have none.
+     */
+    phone: { type: String, trim: true, maxlength: 40, default: '' },
     // Never selected by default: must be requested explicitly.
     passwordHash: { type: String, required: true, select: false },
     role: { type: String, enum: ROLES, required: true },

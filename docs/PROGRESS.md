@@ -14,15 +14,19 @@ Anything else stays 🟡 or ❌. No exceptions.
 > rather than a `[...path]` filename. The npm workspace is still *named* `api`, so `npm -w api` is
 > unchanged. Verification rows from earlier sessions keep the paths they were run with.
 
-**Last updated:** 2026-11-03 (session 8 — self-service password recovery, remember-me, real `/login` URL, live browser verification; reset token gated to local runs before the push; Atlas password rotated)
-**Overall status:** 🟢 **All 12 phases delivered.** 18 test suites / **241 tests** pass, the production
-build succeeds, every screen has been driven against a live API in a real browser, the API runs
-against a persistent MongoDB Atlas cluster, it serves the built UI from the same origin, and **that
-same-origin build is deployed and verified in production. Session 8 re-verified the authentication
-foundation in a live browser and added what was genuinely missing: forgot/reset password, “remember
-me”, and a `/login` URL that matches what is rendered.
+**Last updated:** 2026-11-03 (session 9 — public Home page at `/` and company sign-up at `/signup`
+with `POST /auth/register`; verified by the automated suite and `node scripts/verify-signup.mjs`, a
+21-check walk of the built SPA served by the live API — the browser tool was disabled this session, so
+no click-through was re-run)
+**Overall status:** 🟢 **All 12 phases delivered.** 19 test suites / **276 tests** pass, the production
+build succeeds, every signed-in screen has been driven against a live API in a real browser (sessions
+7–8), the API runs against a persistent MongoDB Atlas cluster, it serves the built UI from the same
+origin, and **that same-origin build is deployed and verified in production.** Session 9 added the
+public front door: a landing page, a company registration screen and the endpoint behind it, on the
+single existing company-creation path.
 **Demo readiness:** ✅ `npm run demo` boots an in-memory database, seeds it and serves the UI;
-`npm run demo -- --atlas` keeps data; `npm run build && npm run start` serves UI + API on :4000.
+`npm run demo -- --atlas` keeps data; `npm run demo -- --empty` starts with no company so `/signup`
+can actually succeed; `npm run build && npm run start` serves UI + API on :4000.
 **Deployment:** ✅ live on Vercel at **https://hcm-lite-eta.vercel.app**, fed by the linked GitHub
 repository. SPA, deep links, login, session cookie, RBAC and a data-backed dashboard were all
 verified against the running deployment. Vercel's own Deployment Protection was turned **off** for
@@ -51,12 +55,13 @@ seeded demo logins (`admin@hcm.test` and colleagues) share one password that shi
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Monorepo (npm workspaces `web` + `server`) | ✅ | Root scripts `dev:web`, `dev:api`, `demo`, `demo -- --atlas`, `build`, `start`, `test`, `typecheck`, `seed`. The `server/` folder is still the workspace *named* `api`, and root `api/` holds only the Vercel Function shim |
-| Backend API | ✅ | 16 route modules, **241 tests** pass |
+| Backend API | ✅ | 16 route modules, **276 tests** pass |
 | MongoDB persistence | ✅ | Runs on the in-memory server **and** against a live Atlas cluster (seed/read/write/delete verified) |
 | Production serving (one origin) | ✅ | The API serves `web/dist` + SPA fallback; 7 tests; verified in a browser from a production build. On Vercel the platform serves the static build instead, which is the same origin but without helmet's CSP |
 | Deployment (Vercel) | ✅ | Live at **https://hcm-lite-eta.vercel.app** — `● Ready`, GitHub-connected, Atlas reachable from the function. `scripts/verify-prod.mjs` passes against it (SPA, deep link, login, cookie flags, 26 permissions, dashboard workforce 12) |
 | MongoDB models | ✅ | 16 Mongoose models covering every domain |
-| Authentication / sessions | ✅ | JWT in HttpOnly cookie, `tokenVersion` revocation, forced password change, self-service forgot/reset password, remember-me (7-day cookie) |
+| Authentication / sessions | ✅ | JWT in HttpOnly cookie, `tokenVersion` revocation, forced password change, self-service forgot/reset password, remember-me (7-day cookie), **company self-registration (`POST /auth/register`)** |
+| Public landing + sign-up | ✅ | `/` renders the marketing page and `/signup` the registration form only while signed out; every link, anchor scroll, modal and CTA is a real route or a real in-page target; the form posts to the real endpoint and mirrors the server password policy. `npm run demo -- --empty` + `npm run verify:signup` walks it end to end (21 checks) |
 | RBAC / permissions | ✅ | 26-permission catalogue, 3 roles, enforced per request, denial tests |
 | Organization & employees | ✅ | Departments, designations, leave types, holidays, employee CRUD, CSV, directory |
 | Attendance | ✅ | Check-in/out, daily board, ledger, summary, manual marking, corrections |
@@ -67,13 +72,48 @@ seeded demo logins (`admin@hcm.test` and colleagues) share one password that shi
 | Audit log | ✅ | Append-only log, filtered list, facets |
 | AI assistant | ✅ | 7 live-data tools, deterministic rules provider, optional OpenAI rephrasing |
 | Settings | ✅ | Company + attendance policy (drives lateness server-side), accounts |
-| Frontend | ✅ | 14 screens behind a router with permission guards; builds in 56 modules |
+| Frontend | ✅ | 18 screens behind a router with permission guards, plus two public pages; builds in 60 modules (347.29 kB JS / 92.22 kB gzip) |
 | Seed script | ✅ | Deterministic; 11 tests read it back through the API |
-| Automated frontend tests | ❌ | No test runner in `web/`; the UI is verified by `tsc`, `vite build` and a browser walk-through |
+| Automated frontend tests | ❌ | No test runner in `web/`; the UI is verified by `tsc`, `vite build`, the live HTTP walk and a browser walk-through |
+| Lint step | ❌ | The repository has no ESLint config and no `lint` script; `tsc --noEmit` in both workspaces is the only static gate |
 
 ---
 
 ## 3. Verification log
+
+### Session 9 (2026-11-03) — public Home page, company sign-up, and the endpoint behind it
+
+The brief asked for two production pages (a landing page at `/` and a sign-up form at `/signup`) plus
+the registration API underneath them, and stated that the UI must be real implementation, not a
+mockup. What was built reuses the single company-creation path that already existed (`performSetup()`)
+rather than opening a second one, because the second one is where a system grows a role a client can
+choose and a company row without its administrator. Verification was done against a live server and the
+built bundle; the interactive browser tool was disabled in this environment, so no click-through was
+re-run — rows 14, 15 and 20 state exactly what the live walk proves and what it does not.
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | `POST /api/v1/auth/register` (`auth.routes.ts` + `setup.service.ts`) | ✅ `registerSchema` (Zod) validates nested `admin` / `company` objects and both consent literals; `registerCompany()` translates the form shape into `performSetup()` and adds no behaviour of its own; password strength is the same service-side rule as setup (D5), the hash is bcrypt, the session cookie is set by the same `setSessionCookie()` every other sign-in uses, and the response is `201` with `toPublicUser()` + the company only |
+| 2 | Role and tenancy are never client-chosen | ✅ `role: 'admin'` is hard-coded inside `performSetup()`, `key: 'primary'` is the only company key the model allows (unique + immutable), and `validate({ body })` runs a Zod object that **strips unknown keys**, so an added `role`, `companyId` or `setupComplete` in the request body never reaches Mongoose. Covered by tests, and measured live: a forged response body key was absent and `role=admin status=active` |
+| 3 | Failure leaves no partial records | ✅ `performSetup()` inserts the company, then the administrator, and on any later failure issues the compensating `CompanyModel.deleteOne()` — no replica set is required, so this works on the in-memory demo and on standalone Atlas (D10). `invalidateCompanySettings()` now runs on **both** the success and the rollback branch, so a failed attempt cannot leave the 30-second settings cache pointing at a deleted company |
+| 4 | Rate limiting on a public, one-shot endpoint | ✅ `registerRateLimit` in `middleware/login-rate-limit.ts`: 5 attempts / 60 min keyed on **IP alone** (there is no account to protect yet, so `ip:email` would be meaningless), `X-RateLimit-Remaining` on every response, `Retry-After` plus **429** when exceeded. `resetLoginRateLimit()` clears the new limiter too, so the suite stays deterministic |
+| 5 | Data model widened, not forked | ✅ `companies` gained `industry`, `companySize`, `country`, `city`; `users` gained `phone`. Both are optional at the schema level with defaults, so every existing document and test is unchanged — no migration was needed and none was performed |
+| 6 | New suite `tests/registration.test.ts` | ✅ **35 tests**: valid registration (company + admin persisted, role, session, no hash in the response), missing fields → 400 with dotted paths (`admin.name`, `admin.email`, `admin.phone`, `company.companySize`, `acceptedTerms`, `acceptedPrivacyPolicy`), invalid email/phone, weak password → 422, mismatched confirmation, each consent refused alone, duplicate email and second-company → 409, unknown body keys ignored, throttle → 429, audit entry attributed (`actorId`, `actorEmail`, `ip`), and the sign-in that must work immediately afterwards |
+| 7 | Full backend suite after the changes | ✅ `npm test` → **19 files, 276 tests passed** (77.52 s on the final run; 126.34 s earlier in the session — the suite has always varied between roughly 60 and 130 s); `npm run typecheck` (server + web) exit 0; `npm run build` exit 0 — `vite build` 60 modules, **347.29 kB JS / 92.22 kB gzip**, `index.html` 1.07 kB, bundle `index-Cx2SXd7Q.js` (the same asset the live walk fetched) |
+| 8 | Landing page (`web/src/screens/LandingScreen.tsx`, 965 lines) | ✅ Nav with working mobile menu (state-driven, closes on navigate), hero with the specified headline and supporting sentence, "Get Started Free" → `/signup`, "Explore Features" → in-page scroll, three stat rows (25+ / 9 / One), 9 feature cards that open a public Modal describing that product area, 9 module tiles, 3-step How It Works with a working Create Account button, Why Choose, final CTA, Contact and footer. **No `href="#"`, no empty handlers** — grepped for both, and every `to` / scroll target is a real route or a real section id |
+| 9 | Nothing fabricated on the public page | ✅ The stats are the product's own numbers (25+ functionalities, 9 modules, one platform — both counts are countable in this codebase); there are no customer counts, no uptime claims, no logos and no testimonials. The Contact section says what is actually available (sign in, start a company, the in-app paths) because **no support email or phone is configured anywhere** — inventing one would be a broken link. The dashboard preview is labelled as a preview and contains no records from any database |
+| 10 | Sign-up screen (`web/src/screens/SignupScreen.tsx`, 709 lines) | ✅ Two columns (green panel with the four highlights, white card with Administrator + Company information), show/hide on both password fields, inline validation that mirrors the **server** policy rather than a copy of it, select controls for industry / company size, country and city as text, both consent checkboxes required before the button is enabled, `useAction()` run/busy so the button shows a spinner and a second click cannot double-submit, server 400 details mapped to fields, the 409 answered with a banner that offers Sign In, Terms of Service and Privacy Policy opened in modals whose text describes what this codebase actually does (no legal boilerplate pretending to cover an unknown product) |
+| 11 | Routing and guards | ✅ `App.tsx`: `!session` → `/` renders the landing page, `/signup` renders sign-up, `/setup` still renders the wizard while `setupRequired`; `/signup` added to `publicPaths`, and a signed-in visitor on `/login` or `/signup` is bounced to `/`. `api.ts` `AUTH_PATHS` gained `/auth/register` so the client treats its 401-shaped errors like any other auth error. `LoginScreen` gained "Create a company account" → `/signup` beside the existing setup link |
+| 12 | Making the sign-up flow reproducible instead of theoretical | ✅ On a seeded or already-registered deployment `/signup` can only ever 409, so the throwaway helper `server/src/scripts/dev-empty.ts` became a documented third mode: `npm run dev:empty -w api`, wired into `scripts/demo.mjs` as `npm run demo -- --empty` (in-memory, **no seed**, same UI + API). `node --check` on the edited launcher exit 0. The walk itself is committed too: **`scripts/verify-signup.mjs`** (`npm run verify:signup`) takes a base URL and runs the whole story against it |
+| 13 | Honest note on what `--empty` changes | ⚠️ It is the only mode where a visitor can register, and it is deliberately not the default: `npm run demo` seeds a company so every screen has data, which is what a walkthrough needs. The production consequence of the single-tenant design stays what it has always been — **one company per deployment** (limitation 14) |
+| 14 | Live walk of the built SPA served by the real API | ✅ `npm run dev:empty` (in-memory MongoDB, no company, `web/dist` served same-origin on :4000) then `node scripts/verify-signup.mjs` → **21 / 21**: health `ready`; `GET /` → shell + `/assets/index-Cx2SXd7Q.js`; `GET /signup` → 200 shell (deep link, no session); shell title `HCM Lite — Smart HR Management for a Better Tomorrow`; the built bundle contains all 5 specified strings; `setupRequired: true`; empty submission → **400 VALIDATION_ERROR with 14 dotted field paths**; weak password → **422** "Password must contain at least 10 characters."; `X-RateLimit-Remaining=4`; valid POST → **201** `company=Signup Verify Co size=51-200 country=Pakistan`, `role=admin mustChange=false`, `HttpOnly; SameSite=Lax`; no `passwordHash`/`tokenVersion`/plaintext in the body; `GET /auth/me` → 200 with **26 permissions**; `GET /settings/public` → `name=Signup Verify Co` immediately (cache invalidated, not waited out); `GET /audit-log?action=auth.register` → `actor=signup.verify@example.com` with actor id and ip; second company → **409 CONFLICT** "This deployment has already been set up. Please sign in instead."; `setupRequired: false`; `/auth/me` without the cookie → **401**; re-login → 200; logout → 200 with `hcm_session=; Expires=Thu, 01 Jan 1970 00:00:00 GMT;` |
+| 15 | The walk re-run in its second mode, and two bugs it found in *itself* | ✅ Running it again against the same server (now registered) takes the read-only branch → **6 / 6**, and that branch is the safe one to point at a real deployment. Getting there corrected two errors in the checker, not in the product: a completely empty body only reports 4 paths (`admin`, `company`, the two consents) because Zod sees the objects as missing, so the check now sends empty *nested* objects to get the 14 leaf paths the form actually maps; and `/settings/public` requires a session (`auth`, no permission), so the probe must carry the cookie. Also measured, not assumed: the limiter admits 5 attempts per window and blocks the 6th with **429**, so a read-only probe spends one slot of that budget — the script says so in its output |
+| 16 | 🔴 Real defect the live walk found: the audit entry had no author | ✅→✅ `recordAudit()` read the actor only from `req.user`, which registration cannot have — the session does not exist yet on that request. So `auth.register` wrote `actorId: null, actorEmail: null`, and any filter on "who did this" would never find a registration. `AuditInput` gained optional `actorId` / `actorEmail` (documented as *only* for pre-session actions), the register route passes the account it just created, and the suite asserts it. Found by the walk, not by the tests — the test asserted the entry existed, which was true even with no author |
+| 17 | Test failure that pinned down the fix | ⚠️→✅ The new assertion failed as `expected { Object (buffer) } to be '6aea8b9…'`: `audit_logs.actorId` is an ObjectId path, so `.lean()` hands back an ObjectId, not a string. Fixed with `String(entry?.actorId)` and a comment, because the route stores the same value the HTTP response publishes. Suite back to **19 files / 276 tests** |
+| 18 | Second real defect, found by probing production | ✅ `GET /` on the deployed app still served `<title>HCM Lite — Announcements &amp; Notifications</title>` — a per-feature title baked into the shell when the app had only one screen. `web/index.html` now carries the product title and a meta description; rebuilt and confirmed in `web/dist`. `tests/static-web.test.ts` asserts against its own temp fixture, so nothing was weakened to make this pass |
+| 19 | Production state **before** this push — same script, read-only branch | ⚠️ `node scripts/verify-signup.mjs https://hcm-lite-eta.vercel.app` → **3 / 6, exit 1**, and each failure is "not deployed yet" rather than a defect: health `200` (Atlas reachable from the function), `GET /` and `GET /signup` both serve the shell, but the deployed shell still carries `<title>HCM Lite — Announcements &amp; Notifications</title>` (row 18's fix is not deployed), none of the 5 landing/sign-up strings exist in the deployed bundle, and `POST /api/v1/auth/register` → **404 NOT_FOUND "Route POST /api/v1/auth/register does not exist."** `GET /setup/status` answers `setupRequired:false`, so the script took its read-only branch — it cannot create a company on a deployment that already has one |
+| 20 | Static-quality gates that do not exist here, stated rather than glossed | ❌ No ESLint config and no `lint` script anywhere in the repository (verified by glob + grep) — `tsc --noEmit` in both workspaces is the only static gate. ❌ `web/` has no test runner, so Part 8's UI checks are covered by this suite's server-side half plus the live walk, not by frontend tests |
+| 21 | Screen / route registry | ✅ `docs/UI_REGISTRY.md` created as the single registry for all 18 screens and the two public pages — each row lists the guard, the permission and the exact endpoints the screen calls (produced by scanning the source, not from memory), with the verification evidence and the known UI gaps recorded honestly. §7 now points there |
 
 ### Session 8 (2026-11-03) — authentication audited against the brief, gaps closed, driven in a live browser
 
@@ -207,8 +247,9 @@ time. No transaction is used anywhere in the API, so Atlas tier limits are not a
 | Suite | Tests | What it proves |
 | --- | --- | --- |
 | `tests/setup.test.ts` | 10 | One-time company setup, duplicate setup refused (409), weak password refused (422), cookie issued |
+| `tests/registration.test.ts` | 35 | Public company sign-up: the full validation matrix, both consents, password strength, mismatch, duplicate email / second company (409), unknown body keys stripped, server-assigned role, session established, throttle, audit attribution |
 | `tests/auth.test.ts` | 19 | Login, logout, `/me`, password change, revocation, forced change, throttling, no enumeration |
-| `tests/password-recovery.test.ts` | 17 | Forgot/reset password (token hashing, expiry, single use, no enumeration, throttling, session revocation) and remember-me cookie behaviour |
+| `tests/password-recovery.test.ts` | 20 | Forgot/reset password (token hashing, expiry, single use, no enumeration, throttling, session revocation), remember-me cookie behaviour, and the `exposesResetToken` deployment gate (local / preview / production) |
 | `tests/rbac.test.ts` | 12 | Employee/HR/admin boundaries, provisioning, duplicate email, no hash leakage |
 | `tests/users.test.ts` | 5 | Account administration: deactivate kills a live session, reset issues a one-time password |
 | `tests/organization.test.ts` | 13 | Departments, designations, leave types and holidays; delete refused while referenced |
@@ -223,6 +264,10 @@ time. No transaction is used anywhere in the API, so Atlas tier limits are not a
 | `tests/units.test.ts` | 15 | `FixedWindowLimiter`, the static permission matrix, `inferNodeEnv` |
 | `tests/seed.test.ts` | 11 | The seed itself: roster integrity, ledger consistency, payroll totals, API read-through |
 | `tests/static-web.test.ts` | 7 | One-origin serving: shell + deep links, immutable asset caching, and that the SPA fallback never swallows an API 404 |
+| `tests/errors.test.ts` | 8 | Transport rejections answered as 413 / 400 / 415 in our envelope, including the platform-shaped error that declares its own status (added in session 7, never listed here until session 9) |
+
+**19 files / 276 tests.** The count is per executed test, not per `it()` call: `registration.test.ts`
+holds 24 `it()`/`it.each()` sites that Vitest runs as 35 tests.
 
 **Test database:** `mongodb-memory-server`, always. `tests/setup-env.ts` sets `MONGODB_URI` and
 `JWT_SECRET` before any application module is imported, and `process.loadEnvFile` deliberately does
@@ -231,8 +276,15 @@ suite at a real database. Verified in session 5 (fingerprint unchanged before/af
 
 ### Explicitly *not* verified
 
-- No **automated** browser test exists (Playwright is not installed). The browser walk-through above
-  was performed manually by driving the live DOM, and is not re-run by `npm test`.
+- No **automated** browser test exists (Playwright is not installed). The browser walk-throughs in
+  sessions 7–8 were performed manually by driving the live DOM, and are not re-run by `npm test`.
+- Session 9 could not use that manual tool at all: the interactive browser agent is disabled in this
+  environment. So the two new public pages were verified by (a) the compiled bundle containing the
+  specified strings, (b) `tsc` accepting every handler and prop, (c) the live HTTP walk of the same
+  build served by the API, and (d) the 35-test registration suite. **What that does not prove:** that a
+  click on the mobile menu, a feature-card modal, an in-page scroll or the password show/hide toggle
+  renders correctly — the wiring is proven, the pixels are not. `docs/UI_REGISTRY.md` carries this as a
+  🟡 row instead of a ✅.
 - No real OpenAI call was made; the assistant runs on its deterministic `rules` provider. The
   `openai` provider path has unit coverage only.
 
@@ -260,13 +312,17 @@ Open <http://localhost:5173> and sign in with:
 | `hr@hcm.test` | HR (17 operational permissions) | `Password123` |
 | `ayesha.khan@hcm.test` | employee (7 self-service permissions) | `Password123` |
 
-### Two database modes
+### Three database modes
 
 | Command | Database | Use for |
 | --- | --- | --- |
 | `npm run demo` | In-memory, seeded on boot, **discarded on exit**. Needs no `.env`. | Screenshots, demos, trying anything destructive |
+| `npm run demo -- --empty` | In-memory, **not seeded**, discarded on exit. Starts on the landing page with `setupRequired: true`. | Walking the public `/signup` flow — the only mode where a registration can succeed; every other mode answers it with 409 |
 | `npm run demo -- --atlas` | Whatever `server/.env` points at. **Data is kept.** | Work you want to survive a restart |
 | `npm run dev:api` + `npm run dev:web` | Same as `--atlas`, two terminals | Watching logs separately |
+
+`--empty` runs `npm run dev:empty -w api` (`server/src/scripts/dev-empty.ts`), which starts the same
+in-memory MongoDB as `dev:mem` and connects **without** seeding.
 
 The repo currently has a working `server/.env` pointing at the `hcm_lite` database of an Atlas cluster.
 It is git-ignored (`.gitignore` line 12 covers `.env`; confirmed with `git check-ignore -v`). To
@@ -278,6 +334,18 @@ recreate it from scratch, copy `.env.example` and set:
 
 Then seed once: `npm run seed -w api`. The seed **refuses** to run against a database that already
 holds a company unless you pass `--reset`, so a stray run cannot erase real data.
+
+### Verifying the public sign-up flow
+
+```powershell
+npm run demo -- --empty     # API :4000 on an unseeded in-memory MongoDB, UI + API on one origin
+npm run verify:signup       # 21 checks: landing, sign-up, registration, session, audit, 409, logout
+```
+
+`scripts/verify-signup.mjs` reads `GET /setup/status` first and picks its branch: on an unregistered
+database it walks the whole story (and leaves a company behind — point it at a throwaway database), on
+an already-set-up deployment it stays read-only (shell, bundle copy, and one probe POST that can only
+answer 404 / 400 / 409 / 429, never 201). It exits 1 on any failed check, so it is usable as a gate.
 
 ### Running the production build locally
 
@@ -359,7 +427,7 @@ To read why a deployment fails when the CLI only prints `● Error`:
 | # | Phase | Status | Note |
 | --- | --- | --- | --- |
 | 1 | Foundation (config, DB, logger, errors, health) | ✅ | Health reports DB state without throwing |
-| 2 | Auth & onboarding | ✅ | Setup wizard, login, forced password change, role menus |
+| 2 | Auth & onboarding | ✅ | Setup wizard, **company self-registration (`POST /auth/register`)**, login, forced password change, role menus |
 | 3 | Organization & employees | ✅ | Master data, employee CRUD, directory, CSV import/export |
 | 4 | Attendance | ✅ | Check-in/out, board, ledger, summary, corrections |
 | 5 | Leave | ✅ | Apply/cancel/decide, balances derived from the ledger, calendar |
@@ -368,7 +436,7 @@ To read why a deployment fails when the CLI only prints `● Error`:
 | 8 | Announcements & audit | ✅ | Feed, drafts, receipts, notifications, audit log |
 | 9 | AI assistant | ✅ | 7 tools over live data; employee-safe refusals |
 | 10 | Settings | ✅ | Company, attendance policy, account administration |
-| 11 | Frontend integration | ✅ | Router, session, 14 screens, every screen wired to the API |
+| 11 | Frontend integration | ✅ | Router, session, 18 screens + 2 public pages, every screen wired to the API |
 | 12 | Release prep | ✅ | Seed script + tests, one-command demo, docs updated, full verification |
 
 ---
@@ -401,7 +469,11 @@ To read why a deployment fails when the CLI only prints `● Error`:
 | AI | AI assistant + tools + smart leave + policy Q&A | ✅ | ✅ | 12 | ✅ Answers from live records; refuses company-wide questions for employees |
 
 **Totals: all 22 tracked functionalities are complete (18 numbered items + 23–25 + the AI assistant).
-241 automated tests exist and pass.**
+276 automated tests exist and pass.**
+
+> Company self-registration (session 9) is **not** one of the brief's 25 items, so it is not numbered
+> here. It carries its own 35-test suite, `POST /auth/register`, the landing and sign-up screens, and
+> rows 1–20 of the session 9 verification log above.
 
 > **Numbering note:** the brief's items 19–22 were never transcribed into this tracker during
 > session 1, so nothing is asserted about them here. They are not referenced by any test name,
@@ -423,23 +495,17 @@ To read why a deployment fails when the CLI only prints `● Error`:
 
 ## 7. Screen / route registry
 
-| Route | Screen | Guard |
-| --- | --- | --- |
-| `/` | Dashboard (company view or personal view) | signed in; personal view if no `analytics.read` |
-| `/login` | Login — a real URL: rendered when there is no session; a signed-in visitor is bounced to `/` | — |
-| `/setup` | Company setup wizard — rendered when `GET /setup/status` reports `setupRequired`; a signed-in visitor is bounced to `/` | — |
-| `/forgot-password`, `/reset-password` | Self-service password recovery; never require a session; a completed reset revokes every session for the account | — |
-| *(state)* | Forced password change | shown while `mustChangePassword` is true |
-| `/organization` | Departments / designations / leave types / holidays | `organization.read` (writes need `organization.manage`) |
-| `/employees` | Directory, add/edit, archive, CSV, Employee 360 | `employee.read` |
-| `/attendance` | Daily board, ledger, corrections, manual marking | `attendance.read` (writes need `attendance.manage`) |
-| `/leave` | Balances, apply, my requests, approvals, calendar | `leave.apply` / `leave.read.own` / `leave.approve` |
-| `/payroll` | Runs, salary structures, payslips, PDF download | `payroll.read.own` or `payroll.read.company` |
-| `/analytics` | Headcount, leave usage, attendance trend, payroll cost | `analytics.read` |
-| `/assistant` | AI assistant chat with tool fact cards | `ai.query` |
-| `/announcements` | Feed, drafts, compose, readers | `announcement.read` |
-| `/audit-log` | Filtered audit trail + facets | `audit.read` |
-| `/settings` | Company profile, attendance policy, accounts | `settings.manage` |
+Moved to **`docs/UI_REGISTRY.md`**, which is now the single registry for every route: the guard chain,
+the public pages, the signed-in routes with their permissions and the exact endpoints each screen calls
+(listed from the source, not from memory), the shared UI kit, and the evidence behind each ✅ —
+including the rows that could not be re-verified this session. The route table is duplicated in
+nothing else, so there is one place to update when the UI changes.
+
+| Summary | Value |
+| --- | --- |
+| Public routes (signed out) | `/` landing, `/signup`, `/login`, `/setup`, `/forgot-password`, `/reset-password` |
+| Signed-in routes | 11 — `/`, `/organization`, `/employees`, `/attendance`, `/leave`, `/payroll`, `/analytics`, `/assistant`, `/announcements`, `/audit-log`, `/settings` |
+| Screen files | 18 in `web/src/screens/*.tsx`; `ChangePasswordScreen` is rendered from state, not from a URL |
 
 Frontend guards are UX only; every endpoint re-checks the same permission server-side.
 
@@ -494,7 +560,8 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 ## 10. Honest limitations
 
 1. **No automated UI tests.** `web/` has no Vitest config or Playwright suite; the UI is gated by
-   `tsc`, `vite build` and manual browser verification only.
+   `tsc`, `vite build`, the live HTTP walk of the built bundle (session 9 row 14) and manual browser
+   verification only. `docs/UI_REGISTRY.md` states which evidence stands behind which row.
 2. **No screenshots in the verification record.** The browser tool reported a zero-size viewport
    (`NATIVE_BROWSER_VIEWPORT_UNAVAILABLE`), so the walk-through was verified from live DOM text.
 3. **~~`docs/` is outside the git repository.~~** Fixed in session 6: the documents moved to
@@ -502,8 +569,9 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
    deliberately left out of the repository. History is still short — the first commit is session 6.
 4. **The assistant's `openai` provider is unexercised live** (no API key). Default `rules` mode is
    what the demo uses.
-5. **Two database modes.** `npm run demo` is ephemeral by design and re-seeds on every boot;
-   `npm run demo -- --atlas` writes to the cluster in `server/.env` and keeps everything.
+5. **Three database modes.** `npm run demo` is ephemeral by design and re-seeds on every boot;
+   `npm run demo -- --atlas` writes to the cluster in `server/.env` and keeps everything;
+   `npm run demo -- --empty` starts unseeded, which is the only way to walk the public sign-up.
 6. **Payroll tax is a fixed demo rule**, not a jurisdiction-accurate calculator.
 7. **~~Credentials in circulation~~** — the Atlas password was pasted into this conversation in plain
    text and has been **rotated by the owner** (2026-11-03); `server/.env` and Vercel's environment
@@ -550,6 +618,16 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
     the handler now also honours (see the session 7 cont. 2 rows). The visible case remains
     `/employees/import`: a CSV above ~100 KB is refused cleanly, so large imports still need splitting —
     the limit itself was not raised. Vercel's own 4.5 MB function body cap is never reached.
+13. **No lint step exists.** The repository has no ESLint configuration and no `lint` script (verified
+    by searching for both in session 9), so style/quality rules are enforced by review and by
+    `tsc --noEmit` only. Adding one is a separate piece of work with its own backlog of findings.
+14. **One company per deployment, and `/signup` inherits that.** `companies.key` is unique and always
+    `'primary'`, so registration can succeed exactly once per database — every later attempt is a
+    correct **409** ("This deployment has already been set up. Please sign in instead."). On the public
+    URL the seeded company already exists, so the form can never create an account there; the flow is
+    walkable with `npm run demo -- --empty`. Making sign-up multi-tenant means putting `companyId` on
+    all 16 models and every query, which is a migration rather than a flag, and a half-done version
+    would leak one tenant's data into another's.
 
 ---
 
@@ -568,6 +646,9 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 | ~~Oversized JSON body answers 500~~ | ✅ Fixed in session 7: transport rejections map to 413 / 400 / 415 (`tests/errors.test.ts`, 8 tests). Large `/employees/import` CSVs still have to stay under ~100 KB — that limit is unchanged |
 | No frontend tests | Add Vitest + React Testing Library for the screens that carry logic |
 | No E2E | Add Playwright for the five-minute demo path |
+| Browser click-through of `/` and `/signup` | The two public pages were verified at HTTP + bundle level (session 9 row 14) because the browser tool was disabled. Drive them once for the menu toggle, the feature modals, the anchor scrolls and the form states, then upgrade those rows in `docs/UI_REGISTRY.md` from 🟡 |
+| `POST /auth/register` on the deployed URL | Answers **404** until this commit is pushed, and **409** after it, because the deployment already holds the seeded company. Neither is a bug. Walk the flow with `npm run demo -- --empty`, or re-enable `/setup` on a fresh database |
+| No lint step | Add an ESLint flat config and a root `lint` script; expect a first-run backlog (the repo has never had one, so nothing is enforced beyond `tsc`) |
 | Assistant provider | Add a smoke test against a real endpoint if a key is ever supplied |
 
 ---
@@ -576,6 +657,7 @@ Deterministic (seeded PRNG), so the demo always shows the same figures.
 
 | Date | Change | By |
 | --- | --- | --- |
+| 2026-11-03 | Session 9: added the public front door. `POST /api/v1/auth/register` (nested Zod `registerSchema` with both consent literals, `registerCompany()` → the existing `performSetup()`, 5/60-min per-IP `registerRateLimit`, compensating rollback plus settings-cache invalidation on both branches, `201` with `toPublicUser()` only); `companies` gained `industry`/`companySize`/`country`/`city` and `users` gained `phone`. Frontend: `LandingScreen` (965 lines) at `/` and `SignupScreen` (709 lines) at `/signup`, both rendered only while signed out, with real routes/targets instead of placeholder links, stats and copy that claim nothing unverifiable, and login/setup links reconciled. New `tests/registration.test.ts` (35) → **19 files / 276 tests**, typecheck 0, build clean (60 modules, 347.29 kB JS). Two defects found and fixed by verification rather than by reading the code: the `auth.register` audit entry had **no author** (`recordAudit()` only read `req.user`), and the deployed shell still carried a per-feature `<title>`. Added `npm run demo -- --empty` so the sign-up flow is walkable at all, plus `scripts/verify-signup.mjs` / `npm run verify:signup` (21 checks, **21/21** green against an unseeded server, 6/6 read-only, 3/6 against production where every failure means "not deployed yet"), and `docs/UI_REGISTRY.md` as the single screen/route registry (§7 now points there). Browser click-through not performed — the tool is disabled in this environment; production still answers **404** for the new route because none of this is deployed yet. | Qoder |
 | 2026-11-03 | Session 8: audited the authentication foundation against the brief — login backend/UI already existed and passed; the genuine gaps were built: `POST /auth/forgot-password` + `POST /auth/reset-password` (SHA-256 one-time token, 30-min expiry, single use, no enumeration, 5/15-min throttle, admin in-app notice, session-wide revocation), remember-me (7-day HttpOnly cookie + JWT `exp`, never localStorage), the specified `/login` UI (Welcome Back, show/hide password, remember me, forgot link, loading/error states), `/forgot-password` + `/reset-password` screens, and `/login`-URL/screen consistency in `App.tsx`. New `tests/password-recovery.test.ts` (17) → **18 files / 238 tests**, server+web typecheck 0, `vite build` clean. Verified end-to-end in a live browser against `npm run demo` (login fail/success, cookie restore on refresh, RBAC denials, full reset cycle, sign-out, deep-link redirect); screenshot blocked by the hidden embedded view (limitation 2). Decisions D35–D36; deviations documented: single-tenant model, cookie sessions (no refresh pair), `/` dashboard path. | Qoder |
 | 2026-11-03 | Session 7 (cont. 2): the local-first fix was wrong about production. Deployed `299fd17`, re-measured: **413 arrived correctly** but malformed JSON and `charset=utf-32le` still answered `500` on Vercel while the same requests gave 400 / 415 against the local demo over a real socket. `vercel logs --json` showed why — the platform runtime throws `Invalid JSON` with `statusCode: 400` and a minified `type` from a `req.body` getter, before `express.json` reads the stream. `bodyParserRejection()` became `transportRejection()`: the type table resolves to a status and **any error declaring its own 4xx** is answered with our envelope and our own message (a 5xx stays a server fault). Verified nothing in the app throws a bare status-carrying object, so the rule cannot mask an intentional `HttpError`. 4 more tests drive `errorHandler` with the logged production shape — **17 files / 221 tests**, typecheck 0, build clean, `declaredClientStatus` present in `dist`. Pushed as `7fe8241`; the auto-build `hcm-lite-hz1jpfwjp` reached `● Ready` in 31 s and production now answers 413 / 400 / 400 where it answered 413 / 500 / 500 — no 500 left. A third build then showed the charset case is **400 or 415 depending on the bytes** (rows 16 and 21), so the platform only intercepts a body it cannot decode itself. | Qoder |
 | 2026-10-31 | Session 7 (cont.): fixed the defect the live audit found. `middleware/error-handler.ts` gains `bodyParserRejection()`, mapping `entity.too.large` → **413 `PAYLOAD_TOO_LARGE`**, `entity.parse.failed` → **400 `BAD_REQUEST`**, and `encoding.unsupported` / `charset.unsupported` → **415 `UNSUPPORTED_MEDIA_TYPE`** instead of the generic 500. New `server/tests/errors.test.ts` (4 tests, no MongoDB needed — `createApp(null)`) proves all three plus that a normal body still reaches the auth layer. Two rounds of measurement were needed: UTF-16LE is actually decodable (returns a 400 parse failure, correctly), and body-parser renames the rejection to `charset.unsupported`. Verified: typecheck 0, **17 files / 217 tests**, error-code table and §8 updated. Committed and pushed as `299fd17`; the 400/415 cases then proved incomplete on the platform — see the next row. | Qoder |

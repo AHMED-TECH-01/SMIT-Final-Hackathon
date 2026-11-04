@@ -4,8 +4,9 @@ import { asyncHandler } from '../../lib/async-handler.js'
 import { ok } from '../../lib/response.js'
 import { validate } from '../../middleware/validate.js'
 import { requireAuth } from '../../middleware/auth.js'
-import { clearLoginAttempts, forgotPasswordRateLimit, loginRateLimit } from '../../middleware/login-rate-limit.js'
+import { clearLoginAttempts, forgotPasswordRateLimit, loginRateLimit, registerRateLimit } from '../../middleware/login-rate-limit.js'
 import { recordAudit } from '../../lib/audit.js'
+import { registerCompany, registerSchema } from '../setup/setup.service.js'
 import {
   changePassword,
   forgotPassword,
@@ -47,6 +48,46 @@ router.post(
     clearLoginAttempts({ ip: req.ip, body: req.body })
     setSessionCookie(res, token, remember ? REMEMBER_ME.maxAgeMs : undefined)
     ok(res, { user: toPublicUser(user) })
+  }),
+)
+
+/**
+ * Public company registration — the sign-up page's only backend door.
+ *
+ * It creates the deployment's single company and its first administrator through
+ * the same code path as the one-time setup wizard, so there is exactly one place
+ * that decides the role, the company key and whether creation is still possible.
+ * Once a company exists this returns 409, which is what stops it being used to
+ * mint additional administrators. No role, status or company id is read from the
+ * request body: `registerSchema` strips anything it does not name.
+ */
+router.post(
+  '/register',
+  registerRateLimit,
+  validate({ body: registerSchema }),
+  asyncHandler(async (req, res) => {
+    const result = await registerCompany(req.body)
+    setSessionCookie(res, result.token)
+    await recordAudit(req, {
+      action: 'auth.register',
+      entity: 'company',
+      entityId: result.company.id,
+      // There is no session on the request yet, so the entry is attributed to
+      // the account this request just created — otherwise a filter on the
+      // author of an action would never find registrations at all.
+      actorId: String(result.user._id),
+      actorEmail: result.user.email,
+      meta: { company: result.company.name, adminEmail: result.user.email },
+    })
+    ok(
+      res,
+      {
+        company: result.company,
+        user: toPublicUser(result.user),
+        setupRequired: false,
+      },
+      201,
+    )
   }),
 )
 

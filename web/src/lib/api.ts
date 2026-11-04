@@ -83,6 +83,7 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
 
 const AUTH_PATHS = [
   '/auth/login',
+  '/auth/register',
   '/auth/me',
   '/auth/logout',
   '/auth/forgot-password',

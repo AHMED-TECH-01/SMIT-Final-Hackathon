@@ -7,6 +7,8 @@ import { SessionProvider, useSession } from './lib/session'
 import { visibleNavItems } from './components/nav'
 import SetupScreen from './screens/SetupScreen'
 import LoginScreen from './screens/LoginScreen'
+import LandingScreen from './screens/LandingScreen'
+import SignupScreen from './screens/SignupScreen'
 import ForgotPasswordScreen from './screens/ForgotPasswordScreen'
 import ResetPasswordScreen from './screens/ResetPasswordScreen'
 import ChangePasswordScreen from './screens/ChangePasswordScreen'
@@ -37,6 +39,7 @@ const ROUTES: Route[] = [
   { path: '/', element: <DashboardScreen /> },
   // A signed-in visitor who lands on the auth screens simply sees the dashboard.
   { path: '/login', element: <DashboardScreen /> },
+  { path: '/signup', element: <DashboardScreen /> },
   { path: '/setup', element: <DashboardScreen /> },
   { path: '/organization', permissions: ['organization.read'], element: <OrganizationScreen /> },
   { path: '/employees', permissions: ['employee.read'], element: <EmployeesScreen /> },
@@ -107,7 +110,11 @@ function CurrentScreen() {
 
 /**
  * Decides what the visitor may see at all:
- * first-run setup → sign-in → forced password change → the app.
+ * public pages → sign-in → forced password change → the app.
+ *
+ * `/` and `/signup` are public: an unauthenticated visitor sees the landing
+ * page and the registration form rather than being pushed into the sign-in
+ * card. Everything else belongs to the application and requires a session.
  *
  * The auth screens are real URLs: `/login` renders the sign-in card when no
  * session exists and bounces to the dashboard when one does. The two
@@ -121,26 +128,41 @@ function Shell() {
 
   useEffect(() => {
     // Auth screens and the URL must agree, in both directions: a signed-in
-    // visitor on /login lands on the dashboard, and a lost session (logout or
-    // expiry) — or any protected deep link without one — is taken to /login
-    // so the address bar shows where the user actually is.
-    if (session && path === '/login') navigate('/', { replace: true })
+    // visitor on /login or /signup lands on the dashboard, and a lost session
+    // (logout or expiry) — or any protected deep link without one — is taken to
+    // /login so the address bar shows where the user actually is.
+    if (session && (path === '/login' || path === '/signup')) navigate('/', { replace: true })
   }, [session, path, navigate])
 
   useEffect(() => {
-    const publicPaths = ['/login', '/setup', '/forgot-password', '/reset-password']
-    if (!session && !loading && !setupRequired && !publicPaths.includes(path)) {
+    const publicPaths = [
+      '/',
+      '/signup',
+      '/login',
+      '/setup',
+      '/forgot-password',
+      '/reset-password',
+    ]
+    if (!session && !loading && !publicPaths.includes(path)) {
       navigate('/login', { replace: true })
     }
-  }, [session, loading, setupRequired, path, navigate])
+  }, [session, loading, path, navigate])
 
   if (loading) return <Splash label="Starting HCM Lite…" />
 
   if (path === '/forgot-password') return <ForgotPasswordScreen />
   if (path === '/reset-password') return <ResetPasswordScreen defaultToken={tokenParam} />
 
-  if (setupRequired) return <SetupScreen />
-  if (!session) return <LoginScreen />
+  if (!session) {
+    // The public surface. `/` is the landing page, `/signup` registers the
+    // company, `/setup` is the first-run wizard for an empty deployment, and
+    // anything else that needs a session falls back to the sign-in card.
+    if (path === '/') return <LandingScreen />
+    if (path === '/signup') return <SignupScreen />
+    if (path === '/setup' && setupRequired) return <SetupScreen />
+    return <LoginScreen />
+  }
+
   if (session.user.mustChangePassword) return <ChangePasswordScreen />
 
   // A session with no permissions still needs a readable shell, not a blank page.
