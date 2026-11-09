@@ -259,8 +259,19 @@ export default function SignupScreen() {
   return (
     <div className="min-h-screen bg-app grid lg:grid-cols-[0.95fr_1.05fr]">
       <aside className="hidden lg:flex flex-col justify-between bg-gradient-to-br from-primary to-[#045c35] text-white p-10">
-        <LeafBrand />
-
+        <div className="flex items-center justify-between">
+          <LeafBrand />
+          <a
+            href="/login"
+            onClick={(event) => {
+              event.preventDefault()
+              navigate('/login')
+            }}
+            className="text-[12.5px] font-medium text-white/70 hover:text-white transition-colors"
+          >
+            Sign In →
+          </a>
+        </div>
         <div className="max-w-md space-y-5">
           <h1 className="text-[32px] font-extrabold leading-tight">
             Build a Better Workplace with HCM Lite.
