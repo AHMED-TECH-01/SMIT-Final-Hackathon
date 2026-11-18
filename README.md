@@ -19,7 +19,7 @@ HCM Lite provide organizations with a centralized platform to manage their workf
 - Streamline payroll processing.
 - Provide role-based access control.
 - Maintain reliable audit records.
-- Support AI-assisted HR operations.
+- Support AI assisted HR operations.
 - Deliver a responsive and intuitive user experience.
 
 ---
