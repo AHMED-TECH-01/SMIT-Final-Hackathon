@@ -10,7 +10,7 @@ The project is being developed using the MERN stack, with a focus on usability, 
 
 ## Project Overview
 
-HCM Lite provides organizations with a centralized platform to manage their workforce and HR operations.
+HCM Lite provide organizations with a centralized platform to manage their workforce and HR operations.
 
 ### Core Objectives
 
